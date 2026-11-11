@@ -111,8 +111,12 @@ func post(t *testing.T, ts *httptest.Server, line string) (code int, reply map[s
 
 func TestGUIFiles(t *testing.T) {
 	ts, _ := newConsole(t)
-	if b := get(t, ts, "/", 200, nil); !strings.Contains(b, "KRONOS") || !strings.Contains(b, "/app.js") {
+	if b := get(t, ts, "/", 200, nil); !strings.Contains(b, "KRONOS") || !strings.Contains(b, "/app.js") || !strings.Contains(b, `data-page="license"`) {
 		t.Fatalf("index:\n%s", b)
+	}
+	// The License page: the copyright holder and the license.
+	if b := get(t, ts, "/app.js", 200, nil); !strings.Contains(b, "Copyright 2026 Kronos Systems.") || !strings.Contains(b, "Apache License, Version 2.0") {
+		t.Fatal("app.js has no License page")
 	}
 	r, err := http.Get(ts.URL + "/kronos-mark.svg")
 	if err != nil {
@@ -409,6 +413,24 @@ func TestSignalEditor(t *testing.T) {
 		t.Fatalf("signal.txt:\n%s", src)
 	}
 
+	// A new signal from its type, with a NAS message chosen from the list.
+	var types models.SignalTypes
+	get(t, ts, "/api/v1/signaltypes", 200, &types)
+	if !contains(types.NGAP, "InitialUEMessage") || !contains(types.GMM, "RegistrationRequest") || !contains(types.GSM, "PDUSessionEstablishmentRequest") {
+		t.Fatalf("types %+v", types)
+	}
+	newOp := map[string]any{"kind": "new", "value": "InitialUEMessage"}
+	if code := send(t, ts, "POST", "/api/v1/signaledit", map[string]any{"hex": "", "mode": "raw", "op": newOp}, &ed); code != 200 || ed.Tree.Name != "InitialUEMessage" {
+		t.Fatalf("new: %d %+v", code, ed)
+	}
+	nasOp := map[string]any{"kind": "nas", "path": "NASPDU/Value", "value": "RegistrationRequest"}
+	if code := send(t, ts, "POST", "/api/v1/signaledit", map[string]any{"hex": ed.Hex, "mode": "raw", "op": nasOp}, &ed); code != 200 {
+		t.Fatalf("NAS: %d %+v", code, ed)
+	}
+	if code := send(t, ts, "POST", "/api/v1/signalfile", map[string]any{"name": "MyRegistration", "hex": ed.Hex, "mode": "raw"}, &f); code != 200 {
+		t.Fatalf("add the new one: %d", code)
+	}
+
 	if code, reply := post(t, ts, "reload"); code != 200 || reply["error"] != "" {
 		t.Fatalf("reload: %d %v", code, reply)
 	}
@@ -416,4 +438,13 @@ func TestSignalEditor(t *testing.T) {
 	if f.Pending {
 		t.Fatalf("pending after reload %+v", f)
 	}
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

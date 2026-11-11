@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"kronos/common/diag"
+	"kronos/models"
 )
 
 // Resolver answers name lookups during validation. The scenario validator
@@ -92,6 +93,44 @@ func Check(c Call, ctx Context, r Resolver) (Spec, Scope, diag.List) {
 			if e.Kind != ExprIdent || !slices.Contains(a.Choices, e.Name) {
 				ds.Errorf(e.Pos, "%s: %s must be one of %s (found %s)", c.Name, a.Name, strings.Join(a.Choices, ", "), e)
 			}
+		case KindVar:
+			if e.Kind != ExprIdent {
+				ds.Errorf(e.Pos, "%s takes the name of a variable (found %s)", c.Name, e)
+			} else if vi, ok := r.Var(e.Name); !ok {
+				ds.Errorf(e.Pos, "variable %s is not declared in var%s", e.Name, hint(e.Name, r.Names(KindValue)))
+			} else if scope&ScopeByVar != 0 {
+				// A public variable is the node's, a private one each subscriber's.
+				scope = ScopeUE
+				if vi.Public {
+					scope = ScopeNode
+				}
+			}
+		case KindValue:
+			if e.Kind == ExprAssign {
+				ds.Errorf(e.Pos, "%s: = assigns a variable only in set(%s = …); compare with ==", c.Name, e.Name)
+			}
+		case KindAssign:
+			if e.Kind != ExprAssign {
+				ds.Errorf(e.Pos, "%s takes an assignment such as set(a = a + 1) (found %s)", c.Name, e)
+				continue
+			}
+			vi, ok := r.Var(e.Name)
+			if !ok {
+				ds.Errorf(e.Pos, "variable %s is not declared in var%s", e.Name, hint(e.Name, r.Names(KindValue)))
+				continue
+			}
+			// In a scenario set runs in its block. On the command line a
+			// private variable is set on the subscribers, a public one once.
+			if scope&ScopeByAssign != 0 {
+				switch {
+				case ctx.Where == InScenario:
+					scope = ScopeNode | ScopeUE
+				case vi.Public:
+					scope = ScopeConsole
+				default:
+					scope = ScopeUE
+				}
+			}
 		case KindRate:
 			if v := EvalLiteral(e); a.ZeroRate && v.Type == TypeInt && v.Int == 0 {
 				break
@@ -110,6 +149,8 @@ func Check(c Call, ctx Context, r Resolver) (Spec, Scope, diag.List) {
 	subject := ctx.Scope
 	if ctx.Where == Interactive {
 		switch {
+		case scope&ScopeByTarget != 0:
+			subject = ScopeConsole // CheckLine makes it ScopeUE when a target is given
 		case scope&ScopeUE != 0:
 			subject = ScopeUE
 		case scope&ScopeNode != 0:
@@ -122,26 +163,14 @@ func Check(c Call, ctx Context, r Resolver) (Spec, Scope, diag.List) {
 		return s, 0, ds
 	}
 
-	// Variables and builtins must exist and belong to the subject.
+	// Variables and builtins must exist and belong to the subject, and the
+	// operators must fit the types.
 	for i, e := range c.Args {
-		if s.argAt(i).Kind != KindValue {
-			continue
-		}
-		switch e.Kind {
-		case ExprIdent:
-			vi, ok := r.Var(e.Name)
-			if !ok {
-				ds.Errorf(e.Pos, "variable %s is not declared in var%s", e.Name, hint(e.Name, r.Names(KindValue)))
-			} else if subject == ScopeNode && !vi.Public {
-				ds.Errorf(e.Pos, "private variable %s cannot be used in node (it belongs to each subscriber)", e.Name)
-			}
-		case ExprBuiltin:
-			bi, ok := LookupBuiltin(e.Name)
-			if !ok {
-				ds.Errorf(e.Pos, "unknown builtin $%s%s", e.Name, hint(e.Name, builtinNames()))
-			} else if bi.Scope&subject == 0 {
-				ds.Errorf(e.Pos, "$%s belongs to each subscriber, so node cannot use it", e.Name)
-			}
+		switch s.argAt(i).Kind {
+		case KindValue:
+			checkExpr(e, r, subject, &ds)
+		case KindAssign:
+			checkAssign(c, e, r, subject, &ds)
 		}
 	}
 	// Command-specific checks run only on an otherwise valid call.
@@ -162,6 +191,12 @@ func scopeMismatch(c Call, s Spec, block Scope) string {
 		}
 		return fmt.Sprintf("%s is a node signal, so subscriber blocks (states, any) cannot send it (write it in the node block)", c.Args[0].Name)
 	}
+	if s.Scope&ScopeByVar != 0 && len(c.Args) > 0 {
+		if block == ScopeNode {
+			return fmt.Sprintf("%s: the node's timers are public variables (%s is private, a timer of each subscriber)", c.Name, c.Args[0].Name)
+		}
+		return fmt.Sprintf("%s: a subscriber's timers are private variables (%s is public: it is a timer of the node, started in node)", c.Name, c.Args[0].Name)
+	}
 	if block == ScopeNode {
 		return fmt.Sprintf("%s cannot be used in the node block (it acts on a subscriber)", c.Name)
 	}
@@ -174,12 +209,19 @@ func CheckLine(l Line, r Resolver) (Spec, Scope, diag.List) {
 	if l.Target == "" || ds.HasErrors() {
 		return s, subject, ds
 	}
+	if s.Scope&ScopeByTarget != 0 {
+		subject = ScopeUE // the subscriber of target() only
+	}
 	switch {
 	case subject != ScopeUE && s.Scope&ScopeBySignal != 0:
 		ds.Errorf(l.TargetPos, "%s is a node signal, so it cannot take target", l.Call.Args[0].Name)
+	case subject != ScopeUE && s.Scope&ScopeByVar != 0:
+		ds.Errorf(l.TargetPos, "%s is public, a timer of the node, so it cannot take target", l.Call.Args[0].Name)
+	case subject != ScopeUE && s.Scope&ScopeByAssign != 0:
+		ds.Errorf(l.TargetPos, "%s is public (one value for all), so set cannot take target", l.Call.Args[0].Name)
 	case subject != ScopeUE:
 		ds.Errorf(l.TargetPos, "%s does not act on subscribers, so it cannot take target", l.Call.Name)
-	case len(l.Target) != imsiDigits || !allDigits(l.Target):
+	case len(l.Target) != models.IMSIDigits || !allDigits(l.Target):
 		ds.Errorf(l.TargetPos, "target() takes a 15-digit IMSI (%s)", l.Target)
 	case !r.Subscriber(l.Target):
 		ds.Errorf(l.TargetPos, "there is no subscriber with IMSI %s", l.Target)

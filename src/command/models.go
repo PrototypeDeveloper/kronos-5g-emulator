@@ -21,6 +21,8 @@ type Spec struct {
 	Check func(c Call, r Resolver, scope Scope) diag.List
 	// Run executes the command for one subject. args are already evaluated.
 	Run func(env Env, args []Value) error
+	// RunCall, if set, runs instead of Run with the arguments as written (set).
+	RunCall func(env Env, c Call) error
 }
 
 // Arg describes one parameter of a command.
@@ -38,13 +40,14 @@ type Arg struct {
 
 // Values, variables and builtins.
 
-// Value is an int, float, string or duration.
+// Value is an int, float, string or duration (or a bool, the result of a comparison).
 type Value struct {
 	Type  Type
 	Int   int64
 	Float float64
 	Str   string
 	Dur   time.Duration
+	Bool  bool
 }
 
 // VarInfo describes a scenario variable.
@@ -82,11 +85,13 @@ type Lexer struct {
 
 // Parsed calls and command lines.
 
-// Expr is one argument of a call.
+// Expr is one argument of a call, or a part of one.
 type Expr struct {
 	Kind ExprKind
-	Name string // ExprIdent and ExprBuiltin
+	Name string // ExprIdent and ExprBuiltin; the variable of ExprAssign
 	Val  Value  // ExprLiteral
+	Op   string // ExprUnary and ExprBinary: "-", "!", "+", "==", "&&" …
+	X, Y *Expr  // the operands (X of ExprParen and ExprUnary; Y, the value, of ExprAssign)
 	Pos  diag.Pos
 }
 

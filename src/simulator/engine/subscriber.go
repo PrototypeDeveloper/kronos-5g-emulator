@@ -92,6 +92,16 @@ func (s *subscriber) handle(m any) {
 		s.afterHandler()
 	case resetMsg:
 		s.reset()
+	case releaseMsg:
+		// The UE association ends without a release procedure (NG Reset).
+		s.e.routes.unbind(s)
+		s.dropTunnels()
+		s.ue.ReleaseNGAP()
+		s.e.publish(models.Event{Kind: models.KindInfo, Source: s.imsi, Text: "UE association released (" + m.why + "); the NAS state stays"})
+	case timerMsg:
+		s.timerExpired(m)
+	case syncMsg:
+		s.syncReceived(m.m)
 	case ueRx:
 		s.receive(m)
 	case execMsg:
@@ -105,6 +115,7 @@ func (s *subscriber) handle(m any) {
 // reset puts the subscriber back to its initial state (link down).
 func (s *subscriber) reset() {
 	s.stopRuns("")
+	s.timers.stopAll()
 	s.dropTunnels()
 	s.tunDown()
 	s.ue.Reset()
@@ -148,15 +159,8 @@ func (s *subscriber) receive(m ueRx) {
 	for _, t := range in.Errors {
 		s.e.publish(models.Event{Kind: models.KindError, Source: s.imsi, Text: t})
 	}
-	// Route the N3 tunnels that came up or went down.
-	for _, t := range in.TunnelsUp {
-		if err := s.e.uplane.bind(t, s); err != nil {
-			s.e.publish(models.Event{Kind: models.KindError, Source: s.imsi, Text: err.Error()})
-			continue
-		}
-		s.tunnels[t.SessionID] = t
-		s.tunUp(t)
-	}
+	// Route the N3 tunnels that went down, then those that came up (a
+	// modified session goes down and up again).
 	for _, dl := range in.TunnelsDown {
 		s.e.uplane.unbind(dl)
 		for id, t := range s.tunnels {
@@ -165,9 +169,17 @@ func (s *subscriber) receive(m ueRx) {
 			}
 		}
 	}
+	for _, t := range in.TunnelsUp {
+		if err := s.e.uplane.bind(t, s); err != nil {
+			s.e.publish(models.Event{Kind: models.KindError, Source: s.imsi, Text: err.Error()})
+			continue
+		}
+		s.tunnels[t.SessionID] = t
+		s.tunUp(t)
+	}
 	// Run the handler, then the entry of the state it moved to.
 	if h != nil {
-		s.run(block+"/receive("+h.Trigger.String()+")", h.Calls)
+		s.run(block+"/receive("+h.Trigger.String()+")", h.Body)
 		s.afterHandler()
 	}
 	// UE context release: drop the NGAP routes and the tunnels.
@@ -218,12 +230,10 @@ func matchHandler(b *scenario.Block, ngap, nas string) *scenario.Handler {
 
 // run executes scenario calls in order; a failing call is reported and the
 // rest still run.
-func (s *subscriber) run(where string, calls []command.Call) {
-	for _, c := range calls {
-		if err := command.Exec(s, c); err != nil {
-			s.e.publish(models.Event{Kind: models.KindError, Source: s.imsi, Handler: where, Text: fmt.Sprintf("%s: %v", c, err)})
-		}
-	}
+func (s *subscriber) run(where string, body []scenario.Stmt) {
+	scenario.Run(s, body, func(what string, err error) {
+		s.e.publish(models.Event{Kind: models.KindError, Source: s.imsi, Handler: where, Text: fmt.Sprintf("%s: %v", what, err)})
+	})
 }
 
 // afterHandler runs the entry of the state that move() went to last, and
@@ -239,7 +249,7 @@ func (s *subscriber) afterHandler() {
 		st := s.moved
 		s.moved = ""
 		if b, ok := s.e.scen.State(st); ok && b.Entry != nil {
-			s.run(st+"/entry", b.Entry.Calls)
+			s.run(st+"/entry", b.Entry.Body)
 		}
 	}
 }
@@ -261,7 +271,7 @@ func (s *subscriber) Send(name string) error {
 	if n == nil {
 		return errors.New("SCTP is not connected (connect with linkup)")
 	}
-	built, err := s.ue.Build(sig)
+	built, err := s.ue.Build(sig, models.MapOff(s.mapOff.Load()))
 	if err != nil {
 		return fmt.Errorf("cannot build %s: %v", name, err)
 	}
@@ -323,16 +333,21 @@ func (s *subscriber) Var(name string) (command.Value, error) {
 	return command.Value{}, fmt.Errorf("there is no variable %s", name)
 }
 
-// SetVar implements command.Env.
-func (s *subscriber) SetVar(name string, v command.Value) error {
-	if old, ok := s.vars[name]; ok {
-		if old.Type != v.Type {
-			return fmt.Errorf("variable %s is of type %s (a %s cannot be assigned)", name, old.Type, v.Type)
-		}
-		s.vars[name] = v
-		return nil
+// Assign implements command.Env: a private variable of the subscriber, or a public one.
+func (s *subscriber) Assign(name string, eval func() (command.Value, error)) error {
+	old, ok := s.vars[name]
+	if !ok {
+		return s.e.vars.assign(name, eval)
 	}
-	return s.e.vars.set(name, v)
+	v, err := eval()
+	switch {
+	case err != nil:
+		return err
+	case old.Type != v.Type:
+		return fmt.Errorf("variable %s is of type %s (a %s cannot be assigned)", name, old.Type, v.Type)
+	}
+	s.vars[name] = v
+	return nil
 }
 
 // Builtin implements command.Env.
@@ -347,7 +362,7 @@ func (s *subscriber) Builtin(name string) (command.Value, error) {
 	case "msg":
 		return command.StrVal(s.lastMsg), nil
 	case "time":
-		return command.StrVal(time.Now().Format("15:04:05.000")), nil
+		return command.StrVal(time.Now().Format(timeLayout)), nil
 	}
 	return command.Value{}, fmt.Errorf("unknown builtin $%s", name)
 }

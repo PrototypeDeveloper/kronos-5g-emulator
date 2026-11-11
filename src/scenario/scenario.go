@@ -5,6 +5,7 @@ import (
 
 	"kronos/command"
 	"kronos/common/diag"
+	"kronos/models"
 )
 
 // BlockKind distinguishes the blocks of scenario.txt.
@@ -53,48 +54,53 @@ func (t Trigger) String() string {
 // message still counts as handled. Used for snap when base.snap is false.
 func (f *File) StripCalls(name string) int {
 	n := 0
-	strip := func(calls []command.Call) []command.Call {
-		out := calls[:0]
-		for _, c := range calls {
-			if c.Name == name {
-				n++
-				continue
-			}
-			out = append(out, c)
-		}
-		return out
-	}
 	for _, b := range f.Blocks() {
-		if b.Entry != nil {
-			b.Entry.Calls = strip(b.Entry.Calls)
-		}
-		for _, h := range b.Handlers {
-			h.Calls = strip(h.Calls)
+		for _, body := range b.bodies() {
+			*body = stripCalls(*body, name, &n)
 		}
 	}
 	return n
 }
 
-// Calls visits every call in the file.
+// Calls visits every call in the file, also those inside if.
 func (f *File) Calls(fn func(b *Block, c command.Call)) {
 	for _, b := range f.Blocks() {
-		if b.Entry != nil {
-			for _, c := range b.Entry.Calls {
-				fn(b, c)
-			}
-		}
-		for _, h := range b.Handlers {
-			for _, c := range h.Calls {
-				fn(b, c)
-			}
+		for _, body := range b.bodies() {
+			eachCall(*body, func(c command.Call) { fn(b, c) })
 		}
 	}
+}
+
+// Sync returns the sync_receive(kind) handler of the block, if it has one.
+func (b *Block) Sync(kind string) (*SyncHandler, bool) {
+	if b == nil {
+		return nil, false
+	}
+	for _, x := range b.Syncs {
+		if x.Kind == kind {
+			return x, true
+		}
+	}
+	return nil, false
+}
+
+// Expire returns the expire(name) handler of the block, if it has one.
+func (b *Block) Expire(name string) (*Expire, bool) {
+	if b == nil {
+		return nil, false
+	}
+	for _, x := range b.Expires {
+		if x.Var == name {
+			return x, true
+		}
+	}
+	return nil, false
 }
 
 // reserved words cannot name a state.
 var reserved = map[string]bool{
 	"var": true, "public": true, "private": true, "node": true, "any": true,
-	"receive": true, "entry": true, "timeout": true, command.TargetKeyword: true,
+	"receive": true, "entry": true, "expire": true, "timeout": true, "if": true, "else": true, "sync_receive": true, command.TargetKeyword: true,
 }
 
 // ReadScenario reads and parses a scenario file.
@@ -231,13 +237,21 @@ func (p *parser) varBody() {
 			continue
 		}
 		lit := p.lx.Next()
-		switch lit.Kind {
-		case command.TokInt, command.TokFloat, command.TokString, command.TokDuration:
+		neg := lit.Kind == command.TokMinus // a negative number: -1, -1.5, -5s
+		if neg {
+			lit = p.lx.Next()
+		}
+		switch {
+		case neg && (lit.Kind == command.TokInt || lit.Kind == command.TokFloat || lit.Kind == command.TokDuration),
+			!neg && (lit.Kind == command.TokInt || lit.Kind == command.TokFloat || lit.Kind == command.TokString || lit.Kind == command.TokDuration):
 			if lit.Val.Type == command.TypeNone {
 				p.errorf(lit, "the initial value %[2]s of %[1]s is too large", v.Name, lit.Text)
 				continue
 			}
 			v.Init = lit.Val
+			if neg {
+				v.Init = negate(lit.Val)
+			}
 		default:
 			p.errorf(lit, "the initial value of %s must be a literal: 1, 1.1, \"text\", 5s … (%s)", v.Name, lit.Found())
 			if lit.Kind == command.TokRBrace {
@@ -247,6 +261,17 @@ func (p *parser) varBody() {
 		}
 		p.f.Vars = append(p.f.Vars, v)
 	}
+}
+
+// negate returns -v of an int, a float or a duration.
+func negate(v command.Value) command.Value {
+	switch v.Type {
+	case command.TypeInt:
+		return command.IntVal(-v.Int)
+	case command.TypeFloat:
+		return command.FloatVal(-v.Float)
+	}
+	return command.DurVal(-v.Dur)
 }
 
 // items parses the receive and entry items of a block up to its closing }.
@@ -264,17 +289,29 @@ func (p *parser) items(b *Block) {
 			p.handler(b)
 		case t.Kind == command.TokIdent && t.Text == "entry":
 			p.entry(b)
+		case t.Kind == command.TokIdent && t.Text == "expire":
+			p.expire(b)
+		case t.Kind == command.TokIdent && t.Text == "sync_receive":
+			p.syncReceive(b)
 		case t.Kind == command.TokIdent && t.Text == "timeout":
 			p.lx.Next()
-			p.ds.Errorf(t.Pos, "timeout is not supported")
+			p.ds.Errorf(t.Pos, "timeout is not supported: start a timer with timer(t) and handle it in expire(t) { … }")
 			p.recoverItem()
+		case t.Kind == command.TokIdent && (t.Text == "if" || t.Text == "else"):
+			p.ds.Errorf(t.Pos, "%s can be written only inside receive(…) { … }, entry { … } or expire(…) { … }", t.Text)
+			if t.Text == "else" {
+				p.lx.Next()
+				p.recoverItem()
+			} else if _, ok := p.ifStmt(); !ok {
+				p.recoverItem()
+			}
 		case t.Kind == command.TokIdent && p.lx.PeekN(1).Kind == command.TokLParen:
 			p.errorf(t, "the command %s cannot be written directly in a block: write it in receive(…) { … } or entry { … }", t.Text)
 			if _, err := command.ParseCall(p.lx); err != nil {
 				p.recoverItem()
 			}
 		default:
-			p.errorf(t, "receive(…), entry or timeout(…) is needed (%s)", t.Found())
+			p.errorf(t, "receive(…), entry, expire(…) or sync_receive(…) is needed (%s)", t.Found())
 			p.lx.Next()
 			p.recoverItem()
 		}
@@ -292,7 +329,7 @@ func (p *parser) recoverItem() {
 		case t.Kind == command.TokLBrace:
 			p.skipGroup()
 			return
-		case t.Kind == command.TokIdent && (t.Text == "receive" || t.Text == "entry" || t.Text == "timeout"):
+		case t.Kind == command.TokIdent && (t.Text == "receive" || t.Text == "entry" || t.Text == "expire" || t.Text == "sync_receive" || t.Text == "timeout"):
 			return
 		}
 		p.lx.Next()
@@ -356,8 +393,73 @@ func (p *parser) handler(b *Block) {
 		p.recoverItem()
 		return
 	}
-	h.Calls = p.calls()
+	h.Body = p.body()
 	b.Handlers = append(b.Handlers, h)
+}
+
+// expire parses expire(var) { calls }: what runs when the timer of var runs out.
+func (p *parser) expire(b *Block) {
+	kw := p.lx.Next()
+	if t := p.lx.Next(); t.Kind != command.TokLParen {
+		p.errorf(t, "expire must be followed by (")
+		p.recoverItem()
+		return
+	}
+	name := p.lx.Next()
+	if name.Kind != command.TokIdent {
+		p.errorf(name, "expire() takes the timer variable, e.g. expire(t) (%s)", name.Found())
+		p.recoverItem()
+		return
+	}
+	if t := p.lx.Next(); t.Kind != command.TokRParen {
+		p.errorf(t, "expire(%s needs a closing ) (%s)", name.Text, t.Found())
+		p.recoverItem()
+		return
+	}
+	if t := p.lx.Next(); t.Kind != command.TokLBrace {
+		p.errorf(t, "expire(%s) must be followed by {", name.Text)
+		p.recoverItem()
+		return
+	}
+	x := &Expire{Pos: kw.Pos, Var: name.Text, Body: p.body()}
+	if prev, dup := b.Expire(name.Text); dup {
+		p.ds.Errorf(kw.Pos, "expire(%s) is written twice in %s (the first is on line %d)", name.Text, b.Name, prev.Pos.Line)
+		return
+	}
+	b.Expires = append(b.Expires, x)
+}
+
+// syncReceive parses sync_receive(kind) { body }: what runs when another
+// pseudo-call sends a message of that kind.
+func (p *parser) syncReceive(b *Block) {
+	kw := p.lx.Next()
+	if t := p.lx.Next(); t.Kind != command.TokLParen {
+		p.errorf(t, "sync_receive must be followed by (")
+		p.recoverItem()
+		return
+	}
+	kind := p.lx.Next()
+	if kind.Kind != command.TokIdent {
+		p.errorf(kind, "sync_receive() takes the kind of message: %s or %s (%s)", models.SyncKindSync, models.SyncKindHO, kind.Found())
+		p.recoverItem()
+		return
+	}
+	if t := p.lx.Next(); t.Kind != command.TokRParen {
+		p.errorf(t, "sync_receive(%s needs a closing ) (%s)", kind.Text, t.Found())
+		p.recoverItem()
+		return
+	}
+	if t := p.lx.Next(); t.Kind != command.TokLBrace {
+		p.errorf(t, "sync_receive(%s) must be followed by {", kind.Text)
+		p.recoverItem()
+		return
+	}
+	x := &SyncHandler{Pos: kw.Pos, Kind: kind.Text, Body: p.body()}
+	if prev, dup := b.Sync(kind.Text); dup {
+		p.ds.Errorf(kw.Pos, "sync_receive(%s) is written twice in %s (the first is on line %d)", kind.Text, b.Name, prev.Pos.Line)
+		return
+	}
+	b.Syncs = append(b.Syncs, x)
 }
 
 // entry parses entry { calls }; any blocks take none and others at most one.
@@ -368,7 +470,7 @@ func (p *parser) entry(b *Block) {
 		p.recoverItem()
 		return
 	}
-	e := &Entry{Pos: kw.Pos, Calls: p.calls()}
+	e := &Entry{Pos: kw.Pos, Body: p.body()}
 	switch {
 	case b.Kind == BlockAny:
 		p.ds.Errorf(kw.Pos, "any cannot have an entry (any is not a state)")
@@ -379,16 +481,29 @@ func (p *parser) entry(b *Block) {
 	}
 }
 
-// calls parses commands up to the closing '}' of a handler or entry body.
-func (p *parser) calls() []command.Call {
-	var out []command.Call
+// body parses statements (commands and if) up to the closing '}' of a
+// handler, entry, expire or if body.
+func (p *parser) body() []Stmt {
+	var out []Stmt
 	for {
-		switch t := p.lx.Peek(); t.Kind {
-		case command.TokRBrace:
+		switch t := p.lx.Peek(); {
+		case t.Kind == command.TokRBrace:
 			p.lx.Next()
 			return out
-		case command.TokEOF:
+		case t.Kind == command.TokEOF:
 			p.errorf(t, "} is missing")
+			return out
+		case t.Kind == command.TokIdent && t.Text == "if":
+			x, ok := p.ifStmt()
+			if !ok {
+				p.skipToClose()
+				return out
+			}
+			out = append(out, Stmt{If: x})
+			continue
+		case t.Kind == command.TokIdent && t.Text == "else":
+			p.errorf(t, "else without if (else follows the } of an if)")
+			p.skipToClose()
 			return out
 		}
 		c, err := command.ParseCall(p.lx)
@@ -412,8 +527,58 @@ func (p *parser) calls() []command.Call {
 			}
 			continue
 		}
-		out = append(out, c)
+		out = append(out, Stmt{Call: c})
 	}
+}
+
+// ifStmt parses if (cond) { body } [else if … | else { body }]. It returns
+// false after a syntax error, which it reports.
+func (p *parser) ifStmt() (*If, bool) {
+	kw := p.lx.Next()
+	x := &If{Pos: kw.Pos}
+	if t := p.lx.Next(); t.Kind != command.TokLParen {
+		p.errorf(t, "if must be followed by ( and a condition, e.g. if (a == 1) { … } (%s)", t.Found())
+		return nil, false
+	}
+	cond, err := command.ParseExpr(p.lx)
+	if err != nil {
+		p.ds.AddErr(err)
+		return nil, false
+	}
+	x.Cond = cond
+	switch t := p.lx.Next(); t.Kind {
+	case command.TokRParen:
+	case command.TokAssign:
+		p.errorf(t, "= assigns a variable (only in set(var = value)); compare with ==")
+		return nil, false
+	default:
+		p.errorf(t, "the condition of if needs a closing ) (%s)", t.Found())
+		return nil, false
+	}
+	if t := p.lx.Next(); t.Kind != command.TokLBrace {
+		p.errorf(t, "if (%s) must be followed by { (%s)", cond, t.Found())
+		return nil, false
+	}
+	x.Then = p.body()
+	if t := p.lx.Peek(); t.Kind != command.TokIdent || t.Text != "else" {
+		return x, true
+	}
+	p.lx.Next()
+	switch t := p.lx.Peek(); {
+	case t.Kind == command.TokIdent && t.Text == "if":
+		y, ok := p.ifStmt()
+		if !ok {
+			return nil, false
+		}
+		x.Else, x.ElseIf = []Stmt{{If: y}}, true
+	case t.Kind == command.TokLBrace:
+		p.lx.Next()
+		x.Else = p.body()
+	default:
+		p.errorf(t, "else must be followed by { or if (%s)", t.Found())
+		return nil, false
+	}
+	return x, true
 }
 
 // skipToClose skips to and past the '}' that closes the current body.

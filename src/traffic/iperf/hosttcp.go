@@ -115,11 +115,6 @@ func RunTCP(ctx context.Context, o TCPOptions, report Reporter) (TCPResult, erro
 	stop := make(chan struct{})
 	done := make(chan error, 1)
 	go func() { done <- pumpTCP(dc, o, start, deadline, &moved, stop) }()
-	type ctlRead struct {
-		n   int
-		b   byte
-		err error
-	}
 	ctl := make(chan ctlRead, 1)
 	k.deadline(time.Time{})
 	go func() {

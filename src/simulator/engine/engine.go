@@ -18,6 +18,7 @@ import (
 	"time"
 
 	libngap "libngap"
+	"libngap/ngapMessage"
 
 	"kronos/command"
 	"kronos/common/diag"
@@ -25,6 +26,7 @@ import (
 	"kronos/scenario"
 	"kronos/simulator/role"
 	"kronos/state"
+	"kronos/transport/peer"
 	"kronos/transport/sctp"
 )
 
@@ -38,11 +40,17 @@ func New(cfg *state.Config, sigs *scenario.SignalSet, scen *scenario.File, r rol
 		role:         r,
 		bus:          NewBus(eventHistory),
 		vars:         newVarStore(scen),
+		controls:     newControls(),
 		snap:         cfg.Base.Snap,
 		nodeHandlers: map[string]*scenario.Handler{},
 		routes:       newRoutes(),
 		stopped:      make(chan struct{}),
 		started:      time.Now(),
+	}
+	if src := cfg.SyncListen(); src != nil {
+		if a, err := netip.ParseAddr(src.Address); err == nil {
+			e.peer = peer.NewClient(netip.AddrPortFrom(a, uint16(src.Port)))
+		}
 	}
 	e.sigs.Store(sigs)
 	bg := context.Background()
@@ -105,6 +113,7 @@ func (e *Engine) Start(ctx context.Context) {
 		wg.Wait()
 		for _, s := range e.subs {
 			s.tunDown()
+			s.timers.stopAll() // the actors have stopped
 		}
 		close(e.stopped)
 	}()
@@ -189,6 +198,7 @@ func (e *Engine) linkLost(n *node) {
 	e.mu.Unlock()
 	e.routes.clear()
 	e.uplane.close()
+	e.controls.reset() // first, so that no subscriber still waits for its turn
 	for _, s := range e.subs {
 		s.post(resetMsg{})
 	}
@@ -398,7 +408,7 @@ func (e *Engine) buildNode(sig *scenario.Signal) ([]byte, error) {
 	if msg == nil {
 		return nil, err
 	}
-	if err := e.role.PatchNode(msg); err != nil {
+	if err := e.role.PatchNode(msg, models.NodeBuild{Off: models.MapOff(e.nodeMapOff.Load()), Associations: e.routes.associations()}); err != nil {
 		return nil, err
 	}
 	return libngap.Encode(msg)
@@ -414,6 +424,11 @@ func (e *Engine) deliverUE(msg any, m rxMsg, name string) {
 	}
 	if s == nil && hasAMF {
 		s = e.routes.byAMF(amf)
+	}
+	if _, ho := msg.(*ngapMessage.HandoverRequest); s == nil && ho {
+		// A new association at this target: the subscriber that took the
+		// handover context over (sync_receive(HO)).
+		s = e.routes.takeHandover(scenario.HandoverULTEIDs(msg))
 	}
 	if s == nil {
 		e.publish(models.Event{Kind: models.KindWarn, Source: models.SourceNode, NGAP: name, Dir: "rx", Len: len(m.b), Hex: hexOf(m.b),
@@ -508,14 +523,31 @@ func (consoleEnv) Iperf(models.IperfArgs) error {
 func (consoleEnv) Stop(string) error { return errors.New("stop is a subscriber command") }
 func (consoleEnv) Send(string) error { return errors.New("the console cannot send") }
 func (consoleEnv) Move(string) error { return errors.New("the console has no state") }
-func (consoleEnv) Var(string) (command.Value, error) {
-	return command.Value{}, errors.New("the console has no variables")
+
+// Var implements command.Env; the console sees the public variables.
+func (c consoleEnv) Var(name string) (command.Value, error) {
+	if v, ok := c.e.vars.get(name); ok {
+		return v, nil
+	}
+	return command.Value{}, fmt.Errorf("there is no public variable %s", name)
 }
-func (consoleEnv) SetVar(string, command.Value) error {
-	return errors.New("the console cannot change variables")
+
+// Assign implements command.Env: set of a public variable on the CUI/GUI, which prints the new value.
+func (c consoleEnv) Assign(name string, eval func() (command.Value, error)) error {
+	if err := c.e.vars.assign(name, eval); err != nil {
+		return err
+	}
+	v, _ := c.e.vars.get(name)
+	c.Print(name + " = " + v.Literal())
+	return nil
 }
-func (consoleEnv) Builtin(string) (command.Value, error) {
-	return command.Value{}, errors.New("the console has no builtins")
+
+// Builtin implements command.Env; the console has $time only.
+func (consoleEnv) Builtin(name string) (command.Value, error) {
+	if name == "time" {
+		return command.StrVal(time.Now().Format(timeLayout)), nil
+	}
+	return command.Value{}, fmt.Errorf("$%s cannot be used on the console", name)
 }
 
 // newVarStore holds the initial values of the public variables of f.
@@ -535,6 +567,19 @@ func (s *varStore) get(name string) (command.Value, bool) {
 	defer s.mu.Unlock()
 	v, ok := s.m[name]
 	return v, ok
+}
+
+// assign stores the value eval returns in a public variable. eval runs
+// under assignMu, so the sets of all subscribers and the node happen one
+// at a time and set(a = a + 1) never loses an addition.
+func (s *varStore) assign(name string, eval func() (command.Value, error)) error {
+	s.assignMu.Lock()
+	defer s.assignMu.Unlock()
+	v, err := eval()
+	if err != nil {
+		return err
+	}
+	return s.set(name, v)
 }
 
 // set assigns a public variable; its type cannot change.
@@ -578,7 +623,88 @@ func (r *routes) byPaging(key string) *subscriber {
 
 // bindRAN and bindAMF route a RAN-UE-NGAP-ID or an AMF-UE-NGAP-ID to s.
 func (r *routes) bindRAN(id int64, s *subscriber) { r.mu.Lock(); r.ran[id] = s; r.mu.Unlock() }
-func (r *routes) bindAMF(id int64, s *subscriber) { r.mu.Lock(); r.amf[id] = s; r.mu.Unlock() }
+
+// bindAMF maps the AMF-UE-NGAP-ID of s; a new one (UE context
+// modification) replaces the old.
+func (r *routes) bindAMF(id int64, s *subscriber) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k, x := range r.amf {
+		if x == s {
+			delete(r.amf, k)
+		}
+	}
+	r.amf[id] = s
+}
+
+// associations lists the UE associations (RAN-UE-NGAP-ID and, when known,
+// AMF-UE-NGAP-ID) by RAN-UE-NGAP-ID.
+func (r *routes) associations() []models.UEAssociation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	amfOf := map[*subscriber]int64{}
+	for id, s := range r.amf {
+		amfOf[s] = id
+	}
+	var out []models.UEAssociation
+	for id, s := range r.ran {
+		a := models.UEAssociation{RANUENGAPID: id}
+		a.AMFUENGAPID, a.HasAMF = amfOf[s]
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].RANUENGAPID < out[j].RANUENGAPID })
+	return out
+}
+
+// awaitHandover lets s wait for a HandoverRequest, matched by ulTEIDs.
+func (r *routes) awaitHandover(s *subscriber, ulTEIDs []uint32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dropWait(s)
+	r.awaitHO = append(r.awaitHO, hoWait{s: s, ulTEIDs: ulTEIDs})
+}
+
+// takeHandover returns the waiting subscriber a HandoverRequest is for: the
+// one with one of its uplink TEIDs, else the one that has waited longest.
+func (r *routes) takeHandover(ulTEIDs []uint32) *subscriber {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.awaitHO) == 0 {
+		return nil
+	}
+	pick := r.awaitHO[0].s
+	for _, w := range r.awaitHO {
+		if sharesTEID(w.ulTEIDs, ulTEIDs) {
+			pick = w.s
+			break
+		}
+	}
+	r.dropWait(pick)
+	return pick
+}
+
+// dropWait removes s from the subscribers waiting for a HandoverRequest (locked).
+func (r *routes) dropWait(s *subscriber) {
+	out := r.awaitHO[:0]
+	for _, w := range r.awaitHO {
+		if w.s != s {
+			out = append(out, w)
+		}
+	}
+	r.awaitHO = out
+}
+
+// sharesTEID reports whether a and b have a TEID in common.
+func sharesTEID(a, b []uint32) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // byRAN and byAMF return the subscriber of a UE NGAP ID, or nil.
 func (r *routes) byRAN(id int64) *subscriber { r.mu.Lock(); defer r.mu.Unlock(); return r.ran[id] }
@@ -606,6 +732,7 @@ func (r *routes) clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ran, r.amf, r.paging = map[int64]*subscriber{}, map[int64]*subscriber{}, map[string]*subscriber{}
+	r.awaitHO = nil
 }
 
 // hexOf renders octets as hex for events.

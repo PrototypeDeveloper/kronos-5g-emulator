@@ -10,6 +10,7 @@ import (
 	"libngap/ngapType"
 
 	"kronos/common/security"
+	"kronos/models"
 	"kronos/scenario"
 )
 
@@ -82,23 +83,29 @@ func (u *UE) sessionStatus() []byte {
 // patchServiceRequest writes the ngKSI (low half octet), the 5G-S-TMSI and the
 // session status IEs. The NAS message container repeats the whole message.
 func (u *UE) patchServiceRequest(t *nasMessage.ServiceRequest) error {
-	t.ServiceTypeAndNgKSI = t.ServiceTypeAndNgKSI&highHalfOctet | u.ksi()
-	id, err := u.sTMSIIdentity()
-	if err != nil {
-		return err
+	if u.off.On(models.MapNgKSI) {
+		t.ServiceTypeAndNgKSI = t.ServiceTypeAndNgKSI&highHalfOctet | u.ksi()
 	}
-	t.FiveGSTMSI = id
-	status := u.sessionStatus()
-	if t.HasPDUSessionStatus {
-		t.PDUSessionStatus = clone(status)
+	if u.off.On(models.MapIdentity) {
+		id, err := u.sTMSIIdentity()
+		if err != nil {
+			return err
+		}
+		t.FiveGSTMSI = id
 	}
-	if t.HasUplinkDataStatus {
-		t.UplinkDataStatus = clone(status)
+	if u.off.On(models.MapStatus) {
+		status := u.sessionStatus()
+		if t.HasPDUSessionStatus {
+			t.PDUSessionStatus = clone(status)
+		}
+		if t.HasUplinkDataStatus {
+			t.UplinkDataStatus = clone(status)
+		}
+		if t.HasAllowedPDUSessionStatus {
+			t.AllowedPDUSessionStatus = clone(status)
+		}
 	}
-	if t.HasAllowedPDUSessionStatus {
-		t.AllowedPDUSessionStatus = clone(status)
-	}
-	if !t.HasNASMessageContainer {
+	if !t.HasNASMessageContainer || !u.off.On(models.MapContainer) {
 		return nil
 	}
 	if u.sec == nil {
@@ -121,8 +128,10 @@ func (u *UE) patchServiceRequest(t *nasMessage.ServiceRequest) error {
 
 // patchDeregistration writes the ngKSI (high half octet) and the identity.
 func (u *UE) patchDeregistration(t *nasMessage.DeregistrationRequestUE) error {
-	t.DeregistrationTypeAndNgKSI = u.ksi()<<ngKSIShift | t.DeregistrationTypeAndNgKSI&lowHalfOctet
-	if len(t.MobileIdentity) == 0 {
+	if u.off.On(models.MapNgKSI) {
+		t.DeregistrationTypeAndNgKSI = u.ksi()<<ngKSIShift | t.DeregistrationTypeAndNgKSI&lowHalfOctet
+	}
+	if len(t.MobileIdentity) == 0 || !u.off.On(models.MapIdentity) {
 		return nil
 	}
 	switch t.MobileIdentity[0] & identityTypeMask {

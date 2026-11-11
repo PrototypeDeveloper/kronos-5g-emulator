@@ -8,6 +8,8 @@ import (
 
 	libnas "libnas"
 	"libngap/ngapType"
+
+	"kronos/models"
 )
 
 // The node and its subscribers.
@@ -28,6 +30,7 @@ type Role struct {
 	k, opc   []byte
 	ri       string // SUCI routing indicator
 	imeisv   []byte // encoded IMEISV; nil keeps the template value
+	imei     []byte // encoded IMEI of the IMEISV (IdentityResponse)
 	ea, ia   byte   // UE security capability: 5G-EA and 5G-IA octets
 	nssai    []byte // Requested NSSAI value; nil keeps the template value
 	nextRAN  atomic.Int64
@@ -37,6 +40,18 @@ type Role struct {
 	n3          netip.Addr     // gNB N3 address (gtpu.src)
 	upfOverride netip.AddrPort // gtpu.dst: overrides the UPF the network names
 	nextTEID    atomic.Int64
+
+	// lastReset is the UE association list of the last NGReset the AMF sent
+	// (nil: the whole interface), which NGResetAcknowledge echoes. Only the
+	// node actor uses it.
+	lastReset []ngapType.UEAssociatedLogicalNGConnectionItem
+}
+
+// autoList is a PDU session list the mapping fills: the list IE, the
+// transfer of its items ("" without one) and the transfer fields it writes.
+type autoList struct {
+	list, transfer string
+	fields         []string
 }
 
 // UE is the gNB-side context of one subscriber: the NGAP IDs and what the NAS
@@ -63,6 +78,16 @@ type UE struct {
 	pendingSetup   []uint8 // sessions of the last setup request, answered by the next response
 	pendingRelease []uint8 // sessions of the last release command, answered by the next response
 	nextPTI        uint8
+
+	off models.MapOff // the mapping items that are off for the signal being built
+
+	rand, sqn     []byte                  // RAND and SQN of the last AuthenticationRequest (the AUTS of a synch failure)
+	identityType  uint8                   // the identity the last IdentityRequest asked for; 0 none
+	prevSec       *libnas.SecurityContext // before the last Security Mode Command (SecurityModeReject puts it back)
+	pendingHO     []uint8                 // sessions of the last HandoverRequest, answered by HandoverRequestAcknowledge
+	pendingModify []uint8                 // sessions of the last PDUSessionResourceModifyRequest
+	sourceAMF     int64                   // AMF-UE-NGAP-ID at the handover source (PathSwitchRequest)
+	hasSourceAMF  bool
 }
 
 // PDU sessions.

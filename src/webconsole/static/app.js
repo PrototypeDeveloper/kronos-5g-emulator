@@ -13,6 +13,7 @@ const PAGES = {
   sequence: "Sequence",
   scenario: "Scenario",
   logs: "Logs",
+  license: "License",
 };
 // KINDS are the event kinds, as offered by the log filters.
 const KINDS = ["message", "state", "info", "snap", "command", "link", "warn", "error"];
@@ -107,6 +108,12 @@ function withTarget(line, target, commands, signals) {
   if (c.scope.includes("signal")) {
     const s = signals.find((x) => x.name === firstArg(t));
     ue = !!s && s.scope === "UE";
+  }
+  if (c.scope.includes("var") || c.scope.includes("assign")) {
+    // A public variable is a timer of the node, or one value for all: no target.
+    const name = firstArg(t).split("=")[0].trim();
+    const v = ((S.scenario && S.scenario.vars) || []).find((x) => x.name === name);
+    ue = !v || !v.public;
   }
   return ue ? `target(${target}).${t}` : t;
 }
@@ -308,6 +315,7 @@ function showPage(name) {
   if (name === "ues") loadUEs();
   if (name === "scenario") renderScenario();
   if (name === "signals") loadSignalFile();
+  if (name === "license") renderLicense();
   if (name === "sequence") scrollEnd($("ladder"), S.seq.follow);
   if (name === "logs") scrollEnd($("loglist"), S.log.follow);
 }
@@ -632,6 +640,8 @@ function placeholderFor(cmd, arg) {
     "iperftcp:dst": "10.10.10.20",
     "iperftcp:rate": "0 (no limit; 100M, 1G, …)",
     "wait:time": "3s",
+    "set:var = value": "a = a + 5",
+    "sync_send:dst": "127.0.0.1:12345",
   }[`${cmd}:${arg.name}`];
   if (p) return p;
   if (arg.default) return arg.default;
@@ -649,7 +659,15 @@ function commandForm(c) {
     else el = h("input", { type: "text", placeholder: a.kind === "format" ? "format (e.g. state %s)" : placeholderFor(c.name, a), size: 16 });
     return { a, el };
   });
-  const scope = c.scope.includes("console") ? "console" : c.scope.includes("signal") ? "depends on the signal" : "subscribers";
+  // What the command runs on, by the first scope word it has.
+  const scopeText = [
+    ["console", "console"],
+    ["signal", "depends on the signal"],
+    ["target", "the selected subscriber, or without one the node and all subscribers"],
+    ["var", "node for a public variable, subscribers for a private one"],
+    ["assign", "once for a public variable, subscribers for a private one"],
+  ].find(([k]) => c.scope.includes(k));
+  const scope = scopeText ? scopeText[1] : "subscribers";
   return h(
     "form",
     {
@@ -793,6 +811,9 @@ const SE = {
   error: "",
   closed: new Set(), // paths of the nodes folded
   newName: null, // the name typed for "Save as new" (null: not asked)
+  newType: "", // the NGAP message picked for a new signal
+  newFilter: "", // the filter of the NGAP message list
+  types: null, // GET /signaltypes: NGAP, 5GMM and 5GSM messages the editor makes
   busy: false,
 };
 
@@ -805,6 +826,7 @@ function signalDirty() {
 async function loadSignalFile() {
   try {
     SE.file = await api.get("/signalfile");
+    if (!SE.types) SE.types = await api.get("/signaltypes");
   } catch (e) {
     SE.file = null;
     SE.error = "Cannot read signal.txt: " + e.message;
@@ -851,7 +873,7 @@ async function openSignal(entry) {
 // newSignal starts an empty new signal (asking before discarding changes).
 function newSignal() {
   if (signalDirty() && !confirm(`Discard the unsaved changes to ${SE.name || "the new signal"}?`)) return;
-  Object.assign(SE, { name: "", isNew: true, mode: "auto", hex: "", base: "", baseMode: "auto", tree: null, diags: [], history: [], closed: new Set(), newName: "", error: "" });
+  Object.assign(SE, { name: "", isNew: true, mode: "auto", hex: "", base: "", baseMode: "auto", tree: null, diags: [], history: [], closed: new Set(), newName: "", newType: "", newFilter: "", error: "" });
   renderSignals();
 }
 
@@ -939,6 +961,8 @@ function editValue(n) {
   const hint = (t) => (t ? h("small", { class: "eh" }, t) : null);
   switch (n.k) {
     case "int":
+      if (n.enum && n.enum.length) return enumValue(n, set);
+    // fall through: an integer without names
     case "string":
     case "octets":
     case "plmn":
@@ -959,17 +983,34 @@ function editValue(n) {
       return sel;
     }
     case "choice":
-      return h(
-        "select",
-        { class: "ev echoice", disabled: SE.busy, title: "The alternative of the CHOICE", onchange: (e) => signalOp({ kind: "choose", path: n.p, value: e.target.value }) },
-        n.alts.map((a) => h("option", { value: a, selected: a === n.alt }, a)),
-      );
+      // A CHOICE, or an IE container entry (its IE, with the IE ID and criticality as the hint).
+      return [
+        h(
+          "select",
+          { class: "ev echoice", disabled: SE.busy, title: "The alternative of the CHOICE (the IE of an IE container entry)", onchange: (e) => signalOp({ kind: "choose", path: n.p, value: e.target.value }) },
+          n.alt ? null : h("option", { value: "", selected: true }, "pick one"),
+          n.alts.map((a) => h("option", { value: a, selected: a === n.alt }, a)),
+        ),
+        hint(n.h),
+      ];
     case "list":
       return hint([n.h, rangeText(n)].filter(Boolean).join(", "));
     case "container": {
       const box = h("span", { class: "ehex", hidden: true }, editInput(n, "ev-octets", n.v, (v) => signalOp({ kind: "hex", path: n.p, value: v })));
+      // A NAS-PDU or NAS container: make a NAS message of a type there.
+      const kinds = SE.types && (n.nas === "5gmm" ? SE.types.gmm : n.nas === "5gsm" ? SE.types.gsm : null);
+      const has = n.c && n.c.length > 0;
+      const nasSel = kinds
+        ? h(
+            "select",
+            { class: "ev echoice", disabled: SE.busy, title: "Make a new NAS message of this type here (its fields get their smallest values)", onchange: (e) => e.target.value && signalOp({ kind: "nas", path: n.p, value: e.target.value }) },
+            h("option", { value: "" }, has ? "replace with a NAS message…" : "pick a NAS message"),
+            kinds.map((k) => h("option", { value: k }, k)),
+          )
+        : null;
       return [
         hint(n.h),
+        nasSel,
         h("button", { type: "button", class: "small secondary", title: "Replace the octets of this nested message as hex", onclick: () => (box.hidden = !box.hidden) }, "hex"),
         box,
       ];
@@ -978,6 +1019,20 @@ function editValue(n) {
       return h("span", { class: "tv" }, n.v);
   }
   return hint(n.h);
+}
+
+// enumValue renders an ENUMERATED value: its names in a select, and a box
+// for a number the type does not name (for tests of invalid values).
+function enumValue(n, set) {
+  const named = n.enum.some((o) => String(o.v) === n.v);
+  const box = h("span", { class: "ehex", hidden: named }, editInput(n, "ev-int", n.v, (v) => set(v)));
+  const sel = h(
+    "select",
+    { class: "ev echoice", disabled: SE.busy, title: rangeText(n), onchange: (e) => e.target.value !== "" && set(e.target.value) },
+    named ? null : h("option", { value: "", selected: true }, `${n.v} (no name)`),
+    n.enum.map((o) => h("option", { value: String(o.v), selected: String(o.v) === n.v }, `${o.n} (${o.v})${o.ext ? " ext" : ""}`)),
+  );
+  return [sel, h("button", { type: "button", class: "small secondary", title: "Enter a number instead", onclick: () => (box.hidden = !box.hidden) }, "#"), box];
 }
 
 // editActions renders what can be done to a node's structure.
@@ -1046,6 +1101,58 @@ function hexDiff(hex, base) {
 }
 
 // renderSignals builds the Signals page: the signal list, the field editor and the octets panel.
+// newSignalForm asks for the name and the NGAP message of a new signal: a
+// filter narrows the list, the select picks from it.
+function newSignalForm() {
+  const name = h("input", { value: SE.newName || "", placeholder: "letters, digits and _", spellcheck: "false" });
+  name.addEventListener("input", () => (SE.newName = name.value));
+  const ngap = (SE.types && SE.types.ngap) || [];
+  const filter = h("input", { value: SE.newFilter, placeholder: "filter, e.g. NAS or Setup", spellcheck: "false" });
+  const pick = h("select", { size: 8, class: "ngap-pick" });
+  const fillPick = () => {
+    const q = SE.newFilter.toLowerCase();
+    const shown = ngap.filter((t) => t.toLowerCase().includes(q));
+    pick.replaceChildren(...shown.map((t) => h("option", { value: t, selected: t === SE.newType }, t)));
+  };
+  fillPick();
+  filter.addEventListener("input", () => {
+    SE.newFilter = filter.value;
+    fillPick();
+  });
+  pick.addEventListener("change", () => (SE.newType = pick.value));
+  const fail = (text) => ((SE.error = text), renderSignals());
+  const create = () => {
+    const n = (SE.newName || "").trim();
+    if (!/^[A-Za-z0-9_]+$/.test(n)) return fail("Give the new signal a name of letters, digits and _.");
+    if (SE.file && SE.file.signals.some((e) => e.name === n)) return fail(`signal.txt already has ${n}: pick another name.`);
+    if (!ngap.includes(SE.newType)) return fail("Pick the NGAP message from the list.");
+    SE.newName = n;
+    signalEdit("", SE.mode, { kind: "new", value: SE.newType }, false);
+  };
+  pick.addEventListener("dblclick", create);
+  return h(
+    "div",
+    { class: "newsig" },
+    h("h3", null, "New signal"),
+    h("div", { class: "toolbar" }, h("label", null, "name", name)),
+    h("div", { class: "toolbar" }, h("label", null, "NGAP message", filter), h("small", null, `${ngap.length} messages`)),
+    pick,
+    h("div", { class: "toolbar" }, h("button", { type: "button", disabled: SE.busy, onclick: create }, "Create"), h("button", { type: "button", class: "secondary", onclick: discardSignal }, "Cancel")),
+    h(
+      "p",
+      { class: "muted" },
+      "The mandatory fields get their smallest values. Edit them, add the optional ones you need, pick the NAS message of a NAS-PDU from its list, then Add. Pasting the octets on the right works too.",
+    ),
+  );
+}
+
+// discardSignal drops the new signal, or the unsaved changes, and goes back to no signal.
+function discardSignal() {
+  if (signalDirty() && !confirm(`Discard ${SE.isNew ? "the new signal" : "the unsaved changes to " + SE.name}?`)) return;
+  Object.assign(SE, { name: "", isNew: false, mode: "auto", hex: "", base: "", baseMode: "auto", tree: null, diags: [], history: [], closed: new Set(), newName: null, newType: "", newFilter: "", error: "" });
+  renderSignals();
+}
+
 function renderSignals() {
   const page = $("page-signals");
   if (!page) return;
@@ -1094,12 +1201,13 @@ function renderSignals() {
   const head = h(
     "div",
     { class: "toolbar" },
-    h("strong", { class: "sig-title" }, SE.isNew ? "New signal" : SE.name || "Pick a signal"),
+    h("strong", { class: "sig-title" }, SE.isNew ? (SE.tree && SE.newName ? `New: ${SE.newName}` : "New signal") : SE.name || "Pick a signal"),
     dirty ? badge("unsaved", "warn") : null,
     h("label", null, "mode", modeSel),
     h("span", { class: "grow" }),
     h("button", { type: "button", class: "secondary", disabled: !SE.history.length || SE.busy, onclick: () => { const p = SE.history.pop(); signalEdit(p.hex, p.mode, null, false); }, title: "Undo the last edit" }, "Undo"),
     SE.isNew ? null : h("button", { type: "button", class: "secondary", disabled: !dirty || SE.busy, onclick: () => signalEdit(SE.base, SE.baseMode, null, true), title: "Back to what signal.txt has" }, "Revert"),
+    SE.isNew ? h("button", { type: "button", class: "secondary", disabled: SE.busy, onclick: discardSignal, title: "Drop the new signal" }, "Discard") : null,
     SE.isNew ? null : h("button", { type: "button", disabled: !dirty || SE.busy || !SE.name, onclick: saveSignal, title: "Write this signal into signal.txt" }, "Save"),
     SE.isNew || SE.newName != null ? null : h("button", { type: "button", class: "secondary", disabled: !SE.tree || SE.busy, onclick: () => ((SE.newName = ""), renderSignals()), title: "Add a copy under a new name" }, "Save as new"),
   );
@@ -1111,7 +1219,9 @@ function renderSignals() {
     SE.error ? h("p", { class: "k-error" }, SE.error) : null,
     SE.tree
       ? h("div", { class: "etree" }, editNode(SE.tree))
-      : h("p", { class: "muted" }, SE.isNew ? "Paste the octets of the new signal (hex) on the right and apply them, then add it under a name." : "Pick a signal on the left to see and edit its fields."),
+      : SE.isNew
+        ? newSignalForm()
+        : h("p", { class: "muted" }, "Pick a signal on the left to see and edit its fields, or make a new one with New."),
     h("p", { class: "muted" }, "Fields marked auto are mapped: gnodeb replaces them when it sends the signal (send mode auto, and the NGAP fields in nas=keep), so a value set here goes out as it is only with raw. Lengths follow the content."),
   );
 
@@ -1329,6 +1439,12 @@ async function selectMessage(seq) {
 
 // ---------- scenario ----------
 
+// stmtLine is one line of a scenario body; the lines inside an if and its
+// closing braces carry no bullet, so the if reads as one statement.
+function stmtLine(line) {
+  return h("li", { class: /^[ }]/.test(line) ? "cont" : null }, line);
+}
+
 // renderScenario shows the scenario: its variables and its blocks with handlers and subscriber counts.
 function renderScenario() {
   const page = $("page-scenario");
@@ -1382,9 +1498,9 @@ function renderScenario() {
           h("span", null, badge(kind, b.kind === "state" ? "info" : "off"), " ", h("strong", null, b.name)),
           h("span", null, b.kind === "state" ? badge(`${n} UE${n === 1 ? "" : "s"}`, n ? "" : "off") : null, h("small", null, `  line ${b.line}`)),
         ),
-        b.entry && b.entry.length ? h("div", { class: "hdl" }, h("div", { class: "trig" }, "entry"), h("ul", null, b.entry.map((c) => h("li", null, c)))) : null,
+        b.entry && b.entry.length ? h("div", { class: "hdl" }, h("div", { class: "trig" }, "entry"), h("ul", null, b.entry.map(stmtLine))) : null,
         (b.handlers || []).map((hd) =>
-          h("div", { class: "hdl" }, h("div", { class: "trig", title: `line ${hd.line}` }, `receive(${hd.trigger})`), h("ul", null, hd.calls.map((c) => h("li", null, c)))),
+          h("div", { class: "hdl" }, h("div", { class: "trig", title: `line ${hd.line}` }, `${hd.kind || "receive"}(${hd.trigger})`), h("ul", null, hd.calls.map(stmtLine))),
         ),
       );
     }),
@@ -1399,6 +1515,40 @@ function renderScenario() {
 // ---------- log ----------
 
 // buildLogsPage builds the Logs page: kind, source and text filters and the log list.
+// ---------- license ----------
+
+// renderLicense shows the copyright and the license in short.
+function renderLicense() {
+  const version = S.status && S.status.version ? S.status.version : "";
+  const apache = "https://www.apache.org/licenses/LICENSE-2.0";
+  fill(
+    $("page-license"),
+    h(
+      "div",
+      { class: "panel" },
+      h("h2", null, "kronos-5g-emulator", version ? h("small", null, " gnodeb " + version) : null),
+      h("p", null, "Copyright 2026 Kronos Systems."),
+      h("p", null, "Licensed under the Apache License, Version 2.0. The full text is in LICENSE at the top of the source tree."),
+    ),
+    h(
+      "div",
+      { class: "panel" },
+      h("h2", null, "Apache License 2.0 in short"),
+      h(
+        "ul",
+        { class: "license-points" },
+        h("li", null, "You may use, copy, modify and distribute the software, in source or binary form, for any purpose, commercial ones included."),
+        h("li", null, "Keep the copyright and license notices with what you distribute, and give the recipients a copy of the license."),
+        h("li", null, "Mark the files you changed as changed."),
+        h("li", null, "Contributors grant a patent license for their contributions; it ends for anyone who sues over patents in the software."),
+        h("li", null, "No right to use the trademarks or names of the licensor is granted."),
+        h("li", null, "The software is provided \"AS IS\", without warranties or conditions of any kind."),
+      ),
+      h("p", { class: "muted" }, "This summary is no substitute for the license: ", h("a", { href: apache, target: "_blank", rel: "noopener" }, apache), "."),
+    ),
+  );
+}
+
 function buildLogsPage() {
   const kinds = KINDS.map((k) =>
     h(
@@ -1590,6 +1740,7 @@ async function refresh() {
   if ($("notice").textContent.startsWith("Cannot reach gnodeb")) notice("");
   renderSide();
   if (S.page === "dashboard") renderDashboard();
+  if (S.page === "license" && !$("page-license").querySelector("small")) renderLicense(); // the version arrives with the status
   if (S.page === "ues") await loadUEs();
   if (S.target) await loadDetail();
   if (S.page === "scenario") {

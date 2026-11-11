@@ -76,3 +76,41 @@ const (
 
 // PPIDNGAP is the payload protocol identifier of NGAP (TS 38.412 §7).
 const PPIDNGAP uint32 = 60
+
+// Items of the mapping (the auto-fix of sent signals), which mapon and
+// mapoff turn on and off. All are on at the start.
+const (
+	MapPLMN      MapItem = iota // PLMN: NGSetupRequest (GlobalRANNodeID, broadcast PLMN), the NR CGI and TAI of the ULI
+	MapTAC                      // TAC: NGSetupRequest (SupportedTAList), the TAI of the ULI
+	MapNCI                      // NR cell identity of the ULI
+	MapGNodeBID                 // gNB ID of NGSetupRequest (GlobalRANNodeID)
+	MapRANName                  // RANNodeName of NGSetupRequest (gnodeb.name)
+	MapSNSSAI                   // S-NSSAI: NGSetupRequest slices, RequestedNSSAI, S-NSSAI of ULNASTransport
+	MapTimeStamp                // TimeStamp of the ULI (the time of sending)
+	MapNGAPID                   // RAN-UE-NGAP-ID and AMF-UE-NGAP-ID
+	MapIdentity                 // SUCI / 5G-GUTI (mobile identity), 5G-S-TMSI
+	MapNgKSI                    // ngKSI of RegistrationRequest, ServiceRequest, DeregistrationRequest
+	MapRES                      // RES* of AuthenticationResponse
+	MapSecCap                   // UE security capability (5G-EA, 5G-IA)
+	MapIMEISV                   // IMEISV of SecurityModeComplete
+	MapSession                  // PDU session ID, type, DNN and PTI (ULNASTransport and its 5GSM)
+	MapStatus                   // PDU session status, uplink data status, allowed PDU session status
+	MapTunnel                   // the PDU session lists of NGAP (session IDs, DL TEID and address, QoS flows)
+	MapContainer                // NAS message container (rebuilt and ciphered)
+	mapItemCount                // the number of items
+)
+
+// MapAll is the set of every mapping item.
+const MapAll = MapOff(1<<mapItemCount - 1)
+
+// Kinds of the messages between pseudo-calls (sync_send / sync_receive).
+const (
+	SyncKindSync = "SYNC" // a plain synchronization
+	SyncKindHO   = "HO"   // a handover: carries the subscriber's mapping context
+)
+
+// Lengths of identifiers that several packages check.
+const (
+	IMSIDigits = 15 // digits of an IMSI
+	TEIDLen    = 4  // octets of a GTP TEID
+)

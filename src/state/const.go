@@ -19,8 +19,6 @@ const (
 	// mncMinDigits and mncMaxDigits bound the number of digits of an MNC.
 	mncMinDigits = 2
 	mncMaxDigits = 3
-	// imsiDigits is the number of digits of an IMSI.
-	imsiDigits = 15
 	// imeisvDigits is the number of digits of an IMEISV.
 	imeisvDigits = 16
 	// minSubscription is the smallest allowed ue.subscription.

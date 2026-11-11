@@ -80,7 +80,8 @@ func present(v reflect.Value, name string) bool {
 
 // Build implements role.UE: decode a fresh copy of the
 // template, fix the NGAP IDs and the location, rebuild and protect the NAS.
-func (u *UE) Build(sig *scenario.Signal) (models.Built, error) {
+func (u *UE) Build(sig *scenario.Signal, off models.MapOff) (models.Built, error) {
+	u.off = off
 	if sig.Mode == scenario.ModeRaw {
 		return models.Built{PDU: sig.Bytes}, nil
 	}
@@ -100,33 +101,41 @@ func (u *UE) build(sig *scenario.Signal) ([]byte, [][]byte, error) {
 	}
 	v := reflect.ValueOf(msg).Elem()
 	_, initial := msg.(*ngapMessage.InitialUEMessage)
-	if initial {
-		// A new UE association: new RAN-UE-NGAP-ID, the AMF's ID is learned again.
+	ids := u.off.On(models.MapNGAPID)
+	_, pathSwitch := msg.(*ngapMessage.PathSwitchRequest)
+	if initial || pathSwitch {
+		// A new UE association: new RAN-UE-NGAP-ID, the AMF's ID is learned
+		// again. With ngapid off the template's ID is sent, and answers come to it.
 		u.ranID, u.hasRAN, u.hasAMF = u.r.nextRAN.Add(1), true, false
+		if !ids {
+			u.ranID = v.FieldByName("RANUENGAPID").Interface().(ngapType.RANUENGAPID).Value
+		}
 	}
 	// The NGAP IDs and the location of this UE association.
-	if present(v, "RANUENGAPID") {
+	if present(v, "RANUENGAPID") && ids {
 		if !u.hasRAN {
 			return nil, nil, errors.New("no RAN-UE-NGAP-ID (send an InitialUEMessage first)")
 		}
 		v.FieldByName("RANUENGAPID").Addr().Interface().(*ngapType.RANUENGAPID).Value = u.ranID
 	}
-	if present(v, "AMFUENGAPID") {
+	if present(v, "AMFUENGAPID") && ids {
 		if !u.hasAMF {
 			return nil, nil, errors.New("no AMF-UE-NGAP-ID received yet")
 		}
 		v.FieldByName("AMFUENGAPID").Addr().Interface().(*ngapType.AMFUENGAPID).Value = u.amfID
 	}
 	if present(v, "UserLocationInformation") {
-		u.r.patchULI(v.FieldByName("UserLocationInformation").Addr().Interface().(*ngapType.UserLocationInformation))
+		u.r.patchULI(v.FieldByName("UserLocationInformation").Addr().Interface().(*ngapType.UserLocationInformation), u.off)
 	}
-	if m, ok := msg.(*ngapMessage.InitialUEMessage); ok && m.HasFiveGSTMSI {
+	if m, ok := msg.(*ngapMessage.InitialUEMessage); ok && m.HasFiveGSTMSI && u.off.On(models.MapIdentity) {
 		// A UE without a 5G-GUTI has no 5G-S-TMSI to give the gNB.
 		m.HasFiveGSTMSI = u.patchFiveGSTMSI(&m.FiveGSTMSI)
 	}
-	// The NAS-PDU, rebuilt and protected.
+	// The NAS-PDU, rebuilt and protected (a NASNonDeliveryIndication returns
+	// a downlink one as it came).
 	var plain [][]byte
-	if present(v, "NASPDU") {
+	_, nonDelivery := msg.(*ngapMessage.NASNonDeliveryIndication)
+	if present(v, "NASPDU") && !nonDelivery {
 		pdu := v.FieldByName("NASPDU").Addr().Interface().(*ngapType.NASPDU)
 		var p []byte
 		if pdu.Value, p, err = u.buildNAS(pdu.Value, sig.Mode, initial); err != nil {
@@ -141,19 +150,30 @@ func (u *UE) build(sig *scenario.Signal) ([]byte, [][]byte, error) {
 	if err := u.patchReleaseLists(msg); err != nil {
 		return nil, nil, err
 	}
+	if err := u.patchProcedures(msg); err != nil {
+		return nil, nil, err
+	}
 	b, err := libngap.Encode(msg)
 	return b, plain, err
 }
 
-// patchULI writes the NR cell and TA of config.
-func (r *Role) patchULI(uli *ngapType.UserLocationInformation) {
-	uli.Present = ngapType.UserLocationInformationPresentUserLocationInformationNR
+// patchULI writes the NR cell and TA of config (the items whose mapping is on).
+func (r *Role) patchULI(uli *ngapType.UserLocationInformation, off models.MapOff) {
+	if off.On(models.MapPLMN) || off.On(models.MapNCI) || off.On(models.MapTAC) {
+		uli.Present = ngapType.UserLocationInformationPresentUserLocationInformationNR
+	}
 	nr := &uli.UserLocationInformationNR
-	nr.NRCGI.PLMNIdentity.Value = clone(r.plmn)
-	nr.NRCGI.NRCellIdentity.Value = ngapType.BitString{Bytes: clone(r.nci.Bytes), BitLength: r.nci.BitLength}
-	nr.TAI.PLMNIdentity.Value = clone(r.plmn)
-	nr.TAI.TAC.Value = clone(r.tac)
-	if nr.HasTimeStamp {
+	if off.On(models.MapPLMN) {
+		nr.NRCGI.PLMNIdentity.Value = clone(r.plmn)
+		nr.TAI.PLMNIdentity.Value = clone(r.plmn)
+	}
+	if off.On(models.MapNCI) {
+		nr.NRCGI.NRCellIdentity.Value = ngapType.BitString{Bytes: clone(r.nci.Bytes), BitLength: r.nci.BitLength}
+	}
+	if off.On(models.MapTAC) {
+		nr.TAI.TAC.Value = clone(r.tac)
+	}
+	if nr.HasTimeStamp && off.On(models.MapTimeStamp) {
 		// The first 32 bits of an NTP timestamp: seconds since 1900 (TS 38.413 §9.3.1.75).
 		nr.TimeStamp.Value = binary.BigEndian.AppendUint32(nil, uint32(time.Now().Unix()+ntpEpochOffset))
 	}
@@ -179,7 +199,7 @@ func (u *UE) buildNAS(b []byte, mode scenario.Mode, initial bool) ([]byte, []byt
 	if err != nil {
 		return nil, nil, err
 	}
-	if hdr == libnas.SecurityHeaderIntegrityProtected {
+	if hdr == libnas.SecurityHeaderIntegrityProtected && u.off.On(models.MapContainer) {
 		if err := u.cipherContainer(m); err != nil {
 			return nil, nil, err
 		}
@@ -202,11 +222,17 @@ func (u *UE) buildNAS(b []byte, mode scenario.Mode, initial bool) ([]byte, []byt
 
 // protection picks the security header type.
 func (u *UE) protection(m any, initial bool) (libnas.SecurityHeaderType, error) {
-	if _, ok := m.(*nasMessage.SecurityModeComplete); ok {
+	switch m.(type) {
+	case *nasMessage.SecurityModeComplete:
 		if u.sec == nil {
 			return 0, errors.New("no Security Mode Command received, so SecurityModeComplete cannot be protected")
 		}
 		return libnas.SecurityHeaderIntegrityProtectedAndCipheredWithNewContext, nil
+	case *nasMessage.SecurityModeReject:
+		// The UE does not take the new context into use: the reject goes in
+		// clear and the context before the command comes back.
+		u.sec = u.prevSec
+		return libnas.SecurityHeaderPlain, nil
 	}
 	switch {
 	case u.sec == nil:
@@ -226,14 +252,25 @@ func (u *UE) patchNAS(m any, inContainer bool) error {
 	switch t := m.(type) {
 	case *nasMessage.RegistrationRequest:
 		u.patchRegistrationRequest(t, inContainer)
-		if !inContainer {
+		if !inContainer && u.off.On(models.MapContainer) {
 			return u.patchRegistrationContainer(t)
 		}
 	case *nasMessage.ServiceRequest:
 		return u.patchServiceRequest(t)
 	case *nasMessage.DeregistrationRequestUE:
 		return u.patchDeregistration(t)
+	case *nasMessage.IdentityResponse:
+		if u.off.On(models.MapIdentity) {
+			return u.patchIdentityResponse(t)
+		}
+	case *nasMessage.AuthenticationFailure:
+		if u.off.On(models.MapRES) {
+			return u.patchAuthenticationFailure(t)
+		}
 	case *nasMessage.AuthenticationResponse:
+		if !u.off.On(models.MapRES) {
+			return nil
+		}
 		if u.resStar == nil {
 			return errors.New("no RES* (no AuthenticationRequest received, or the authentication failed)")
 		}
@@ -242,16 +279,18 @@ func (u *UE) patchNAS(m any, inContainer bool) error {
 	case *nasMessage.ULNASTransport:
 		return u.patchULNASTransport(t)
 	case *nasMessage.SecurityModeComplete:
-		had := t.HasIMEISV
-		t.HasIMEISV = false
-		if u.imeisvRequested {
-			if u.r.imeisv != nil {
-				t.HasIMEISV, t.IMEISV.Value = true, clone(u.r.imeisv)
-			} else {
-				t.HasIMEISV = had // keep the template's IMEISV
+		if u.off.On(models.MapIMEISV) {
+			had := t.HasIMEISV
+			t.HasIMEISV = false
+			if u.imeisvRequested {
+				if u.r.imeisv != nil {
+					t.HasIMEISV, t.IMEISV.Value = true, clone(u.r.imeisv)
+				} else {
+					t.HasIMEISV = had // keep the template's IMEISV
+				}
 			}
 		}
-		if t.HasNASMessageContainer {
+		if t.HasNASMessageContainer && u.off.On(models.MapContainer) {
 			inner, err := libnas.Decode(t.NASMessageContainer.Value, nil)
 			if err != nil {
 				return fmt.Errorf("cannot decode the NAS message container: %v", err)
@@ -270,7 +309,7 @@ func (u *UE) patchNAS(m any, inContainer bool) error {
 // patchRegistrationRequest writes the ngKSI, the identity, the security
 // capability, the NSSAI and the PDU session status IEs.
 func (u *UE) patchRegistrationRequest(t *nasMessage.RegistrationRequest, inContainer bool) {
-	if !inContainer { // the container repeats the initial message as it was sent
+	if !inContainer && u.off.On(models.MapNgKSI) { // the container repeats the initial message as it was sent
 		ksi := uint8(noKey)
 		if u.sec != nil {
 			ksi = u.ngKSI & ksiMask
@@ -278,7 +317,7 @@ func (u *UE) patchRegistrationRequest(t *nasMessage.RegistrationRequest, inConta
 		t.RegistrationTypeAndNgKSI = ksi<<ngKSIShift | t.RegistrationTypeAndNgKSI&lowHalfOctet
 	}
 	// The identity type of the template decides SUCI or 5G-GUTI.
-	if len(t.MobileIdentity) > 0 {
+	if len(t.MobileIdentity) > 0 && u.off.On(models.MapIdentity) {
 		switch t.MobileIdentity[0] & identityTypeMask {
 		case nasType.MobileIdentitySUCI:
 			if suci, err := security.NullSUCI(u.r.mcc, u.r.mnc, u.r.ri, u.msin); err == nil {
@@ -290,13 +329,16 @@ func (u *UE) patchRegistrationRequest(t *nasMessage.RegistrationRequest, inConta
 			}
 		}
 	}
-	if t.HasUESecurityCapability && len(t.UESecurityCapability.Value) >= 2 {
+	if t.HasUESecurityCapability && len(t.UESecurityCapability.Value) >= secCapLen && u.off.On(models.MapSecCap) {
 		v := clone(t.UESecurityCapability.Value)
 		v[0], v[1] = u.r.ea, u.r.ia
 		t.UESecurityCapability.Value = v
 	}
-	if t.HasRequestedNSSAI && u.r.nssai != nil {
+	if t.HasRequestedNSSAI && u.r.nssai != nil && u.off.On(models.MapSNSSAI) {
 		t.RequestedNSSAI.Value = clone(u.r.nssai)
+	}
+	if !u.off.On(models.MapStatus) {
+		return
 	}
 	status := u.sessionStatus()
 	if t.HasPDUSessionStatus {
@@ -320,6 +362,7 @@ func (u *UE) Receive(msg any) models.Inbound {
 		in.Release = true
 	}
 	u.receiveNGAP(msg, &in)
+	u.receiveProcedures(msg, &in)
 	for _, b := range scenario.NASPDUs(msg) {
 		u.receiveNAS(b, &in)
 	}
@@ -408,8 +451,13 @@ func (u *UE) receiveNAS(b []byte, in *models.Inbound) {
 		in.Notes = append(in.Notes, "registration rejected (RegistrationReject)")
 		u.deregister(in)
 	case *nasMessage.AuthenticationReject:
-		u.resStar = nil
-		in.Notes = append(in.Notes, "authentication rejected (AuthenticationReject)")
+		// The UE deletes its 5G-GUTI, ngKSI and security context (TS 24.501 5.4.1.3.5).
+		u.resStar, u.sec, u.guti, u.ngKSI = nil, nil, nil, noKey
+		in.Notes = append(in.Notes, "authentication rejected (AuthenticationReject): the 5G-GUTI and the NAS security context are deleted")
+		u.deregister(in)
+	case *nasMessage.IdentityRequest:
+		u.identityType = t.IdentityType & identityTypeMask
+		in.Notes = append(in.Notes, fmt.Sprintf("Identity Request: identity type %d", u.identityType))
 	case *nasMessage.DLNASTransport:
 		if c := t.PayloadContainer; t.PayloadContainerType == payloadN1SMInfo && len(c) >= 4 {
 			if inner, ok := scenario.NASByType(c[0], c[3]); ok {
@@ -441,6 +489,7 @@ func (u *UE) authenticate(t *nasMessage.AuthenticationRequest, in *models.Inboun
 		return
 	}
 	rand, autn := t.AuthenticationParameterRAND.Value, t.AuthenticationParameterAUTN.Value
+	u.rand, u.sqn = clone(rand), nil
 	m, err := security.NewMilenage(u.r.k, u.r.opc)
 	if err != nil {
 		in.Errors = append(in.Errors, "authentication: "+err.Error())
@@ -452,6 +501,7 @@ func (u *UE) authenticate(t *nasMessage.AuthenticationRequest, in *models.Inboun
 	for i := range sqn {
 		sqn[i] = sqnXorAK[i] ^ ak[i]
 	}
+	u.sqn = sqn // SQN_MS of a synch failure (AUTS)
 	if xmac, _ := m.F1(rand, sqn, amf); !bytes.Equal(xmac, mac) {
 		in.Errors = append(in.Errors, "authentication: the MAC of AUTN does not match (K or OPc may differ from the subscriber data of the network)")
 		return
@@ -485,7 +535,7 @@ func (u *UE) securityMode(t *nasMessage.SecurityModeCommand, wire []byte, in *mo
 		in.Errors = append(in.Errors, "Security Mode Command: "+err.Error()+" (the key derivation does not match the network)")
 		return
 	}
-	u.sec, u.ngKSI = sec, t.NgKSI
+	u.prevSec, u.sec, u.ngKSI = u.sec, sec, t.NgKSI
 	u.imeisvRequested = t.HasIMEISVRequest && t.IMEISVRequest.Value&1 == 1
 	in.Notes = append(in.Notes, fmt.Sprintf("Security Mode: NAS protection starts with NIA%d / NEA%d", ia, ca))
 	if r := t.ReplayedUESecurityCapabilities; len(r) < 2 || r[0] != u.r.ea || r[1] != u.r.ia {
@@ -534,6 +584,9 @@ func (u *UE) receive5GSM(b []byte, in *models.Inbound) {
 	case *nasMessage.PDUSessionEstablishmentAccept:
 		u.acceptSession(t, in)
 	case *nasMessage.PDUSessionEstablishmentReject:
+		if s := u.sessions[t.PDUSessionID]; s != nil && !s.ueIP.IsValid() {
+			delete(u.sessions, t.PDUSessionID) // it never came up
+		}
 		in.Notes = append(in.Notes, fmt.Sprintf("PDU session %d establishment rejected", t.PDUSessionID))
 	case *nasMessage.PDUSessionReleaseCommand:
 		u.session(t.PDUSessionID).relPTI = t.ProcedureTransactionID

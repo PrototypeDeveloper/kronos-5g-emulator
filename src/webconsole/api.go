@@ -109,7 +109,7 @@ func (s *Server) vars(w http.ResponseWriter, r *http.Request) {
 
 var kindNames = map[command.Kind]string{
 	command.KindSignal: "signal", command.KindState: "state", command.KindFormat: "format",
-	command.KindValue: "value", command.KindCommand: "command", command.KindRate: "rate", command.KindChoice: "choice",
+	command.KindValue: "value", command.KindCommand: "command", command.KindRate: "rate", command.KindChoice: "choice", command.KindVar: "var", command.KindAssign: "assign",
 }
 
 // commandList serves GET /api/v1/commands: every registered command.
@@ -123,7 +123,7 @@ func (s *Server) commandList(w http.ResponseWriter, r *http.Request) {
 		for _, sc := range []struct {
 			bit  command.Scope
 			name string
-		}{{command.ScopeNode, "node"}, {command.ScopeUE, "ue"}, {command.ScopeConsole, "console"}, {command.ScopeBySignal, "signal"}} {
+		}{{command.ScopeNode, "node"}, {command.ScopeUE, "ue"}, {command.ScopeConsole, "console"}, {command.ScopeBySignal, "signal"}, {command.ScopeByVar, "var"}, {command.ScopeByAssign, "assign"}, {command.ScopeByTarget, "target"}} {
 			if sp.Scope&sc.bit != 0 {
 				ci.Scope = append(ci.Scope, sc.name)
 			}
@@ -301,4 +301,10 @@ func (s *Server) addSignal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.saveSignal(w, req.Name, req.Hex, req.Mode, true)
+}
+
+// signalTypes serves GET /api/v1/signaltypes: the NGAP messages a new
+// signal can be, and the NAS messages a NAS-PDU or container can hold.
+func (s *Server) signalTypes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.b.SignalTypes())
 }

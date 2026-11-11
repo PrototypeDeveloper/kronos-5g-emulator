@@ -61,3 +61,24 @@ func IMEISV(s string) ([]byte, error) {
 	out := []byte{(s[0]-'0')<<4 | identityTypeIMEISV} // even number of digits, type IMEISV
 	return append(out, bcd(s[1:], 16)...), nil
 }
+
+// IMEI encodes the IMEI of a 16-digit IMEISV as a 5GS mobile identity value
+// (type 3): its first 14 digits and the check digit (TS 23.003 annex B).
+func IMEI(imeisv string) ([]byte, error) {
+	if len(imeisv) != imeisvDigits || !digits(imeisv) {
+		return nil, fmt.Errorf("imeisv: %q is not 16 digits", imeisv)
+	}
+	body := imeisv[:imeiBodyDigits]
+	sum := 0
+	for i := range body {
+		d := int(body[i] - '0')
+		if i%luhnWeight == 1 { // every second digit from the left is doubled
+			d *= luhnWeight
+			d = d/decimalBase + d%decimalBase
+		}
+		sum += d
+	}
+	s := body + string(rune('0'+(decimalBase-sum%decimalBase)%decimalBase))
+	out := []byte{(s[0]-'0')<<4 | identityTypeIMEI}
+	return append(out, bcd(s[1:], imeiBodyDigits)...), nil
+}

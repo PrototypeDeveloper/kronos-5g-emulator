@@ -67,18 +67,18 @@ func TestAutoFields(t *testing.T) {
 		auto   bool
 		note   string
 	}{
-		{"InitialUEMeesageRegistrationRequest", scenario.ModeAuto, "RANUENGAPID/Value", true, "the NGAP ID of the UE association"},
+		{"InitialUEMeesageRegistrationRequest", scenario.ModeAuto, "RANUENGAPID/Value", true, "the NGAP ID of the UE association [mapping: ngapid]"},
 		{"InitialUEMeesageRegistrationRequest", scenario.ModeAuto, "UserLocationInformation/UserLocationInformationNR/TAI/TAC/Value", true, ""},
 		{"InitialUEMeesageRegistrationRequest", scenario.ModeAuto, "RRCEstablishmentCause/Value", false, ""},
 		{"InitialUEMeesageRegistrationRequest", scenario.ModeAuto, in + "MobileIdentity", true, ""},
-		{"InitialUEMeesageRegistrationRequest", scenario.ModeAuto, in + "RegistrationTypeAndNgKSI", false, "the ngKSI (high 4 bits) is replaced"},
+		{"InitialUEMeesageRegistrationRequest", scenario.ModeAuto, in + "RegistrationTypeAndNgKSI", false, "the ngKSI (high 4 bits) is replaced [mapping: ngksi]"},
 		{"InitialUEMeesageRegistrationRequest", scenario.ModeAuto, in + "@SecurityHeaderType", true, ""},
 		{"InitialUEMeesageRegistrationRequest", scenario.ModeNASKeep, in + "MobileIdentity", false, ""},
 		{"InitialUEMeesageRegistrationRequest", scenario.ModeNASKeep, in + "@SecurityHeaderType", true, ""},
 		{"InitialUEMeesageRegistrationRequest", scenario.ModeNASKeep, "RANUENGAPID/Value", true, ""},
 		{"InitialUEMeesageRegistrationRequest", scenario.ModeRaw, "RANUENGAPID/Value", false, ""},
 		{"InitialUEMeesageRegistrationRequest", scenario.ModeRaw, in + "@SecurityHeaderType", false, ""},
-		{"UpLinkNASTransportSecurityModeComplete", scenario.ModeAuto, in + "IMEISV/Value", false, "replaced by ue.imeisv when the Security Mode Command asks for it"},
+		{"UpLinkNASTransportSecurityModeComplete", scenario.ModeAuto, in + "IMEISV/Value", false, "replaced by ue.imeisv when the Security Mode Command asks for it [mapping: imeisv]"},
 		{"UpLinkNASTransportSecurityModeComplete", scenario.ModeAuto, in + "NASMessageContainer/Value/>/MobileIdentity", true, ""},
 		{"UpLinkNASTransportSecurityModeComplete", scenario.ModeAuto, in + "NASMessageContainer/Value/>/RegistrationTypeAndNgKSI", false, ""},
 		{"UpLinkNASTransportSecurityModeComplete", scenario.ModeAuto, in + "NASMessageContainer/Value/>/RequestedNSSAI/Value", false, ""},
@@ -86,8 +86,8 @@ func TestAutoFields(t *testing.T) {
 		{"UplinkNASTransportPDUSessionEstablishmentRequest", scenario.ModeAuto, in + "PayloadContainer/>/ProcedureTransactionID", true, ""},
 		{"UplinkNASTransportPDUSessionEstablishmentRequest", scenario.ModeAuto, in + "PayloadContainer/>/SSCMode/Value", false, ""},
 		{"UplinkNASTransportPDUSessionEstablishmentRequest", scenario.ModeAuto, in + "PDUSessionID/Value", true, ""},
-		{"UplinkNASTransportPDUSessionEstablishmentRequest", scenario.ModeAuto, in + "DNN/Value", false, "replaced when ue.session gives one"},
-		{"PDUSessionResourceSetupResponse", scenario.ModeAuto, "PDUSessionResourceSetupListSURes/List", false, "one item per PDU session answered; the first item is the pattern"},
+		{"UplinkNASTransportPDUSessionEstablishmentRequest", scenario.ModeAuto, in + "DNN/Value", false, "replaced when ue.session gives one [mapping: session]"},
+		{"PDUSessionResourceSetupResponse", scenario.ModeAuto, "PDUSessionResourceSetupListSURes/List", false, "one item per PDU session answered; the first item is the pattern [mapping: tunnel]"},
 		{"PDUSessionResourceSetupResponse", scenario.ModeAuto, "PDUSessionResourceSetupListSURes/List/0/PDUSessionID/Value", true, ""},
 		{"PDUSessionResourceSetupResponse", scenario.ModeAuto,
 			"PDUSessionResourceSetupListSURes/List/0/PDUSessionResourceSetupResponseTransfer/>/DLQosFlowPerTNLInformation/UPTransportLayerInformation/GTPTunnel/GTPTEID/Value", true, ""},
@@ -112,13 +112,13 @@ func TestBuildNASSpareBits(t *testing.T) {
 	}
 	reg, _ := sigs.Lookup("InitialUEMeesageRegistrationRequest")
 	r := autoRole(t, "")
-	if _, err := r.NewUE(0, "001010000000001").Build(reg); err != nil {
+	if _, err := r.NewUE(0, "001010000000001").Build(reg, 0); err != nil {
 		t.Fatalf("the sample: %v", err)
 	}
 	h := hex.EncodeToString(reg.Bytes)
 	set, _ := scenario.ParseSignals("x", []byte("Spare { "+strings.Replace(h, "7e004179", "7e104179", 1)+" }"))
 	spare, _ := set.Lookup("Spare")
-	if _, err := r.NewUE(0, "001010000000001").Build(spare); err == nil || !strings.Contains(err.Error(), "spare bits") {
+	if _, err := r.NewUE(0, "001010000000001").Build(spare, 0); err == nil || !strings.Contains(err.Error(), "spare bits") {
 		t.Fatalf("spare bits: %v", err)
 	}
 }

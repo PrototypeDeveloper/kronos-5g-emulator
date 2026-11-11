@@ -1,83 +1,49 @@
 # kronos-5g-emulator
 
-Go で書いた 5G の gNodeB 疑似呼です。`gnodeb` は 5G コアに N2（NGAP/SCTP）と N3（GTP-U）でつながり、シナリオに沿って多数の UE（IMSI が連番の加入者）を動かします。操作は、端末（CUI）と、同じバイナリに入っている Web コンソールのどちらからでもできます。メッセージと画面の表示は英語です。
+5G の gNodeB 疑似呼です。5G コアに N2（NGAP/SCTP）と N3（GTP-U）で接続し、シナリオに沿って加入者（UE）を動かします。
 
-[English](README.md)
-
-## 機能
-
-- NG Setup、Registration（5G AKA、NAS セキュリティ）、PDU セッションの確立と解放、UE Context Release、Service Request、Paging、Deregistration
-- キャプチャしたテンプレート（`signal.txt`）から NGAP メッセージを作り、動的な項目（ID、鍵、PLMN、TEID など）を自動で補正する
-- シナリオ（`scenario.txt`）: 状態、entry、受信したメッセージごとのハンドラ
-- GTP-U の U-plane: `ping` と、DN の iperf3 サーバと試験する iperf3 互換の UDP クライアント（`iperf`）
-- UE ごとの TUN デバイス（`ue.tun`。任意）。ホストの `iperf3` や `curl` などが、カーネルの TCP/IP で PDU セッションを使える。これを通る内蔵の iperf3 TCP クライアント `iperftcp` もある（シナリオからも使える）
-- Web コンソール: ダッシュボード、加入者、信号のボタン、デコード付きのシーケンス図、ログ、信号の編集（`signal.txt` の信号をデコードして値と構造を変え、更新や新しい名前での追加をする。`reload` でファイルの信号を送るようになる）
-- バッチ（`@ファイル`、`--exec`）と、全メッセージの JSONL トレース
-
-## 必要なもの
-
-- SCTP をカーネルで使える Linux（`sctp` モジュール。カーネル 3.17 以降）
-- ビルドには Go 1.22 以降（Ubuntu 24.04 の `golang-go` パッケージで足りる）
+[English](README.md) ・ 使い方は [docs/manual_ja.md](docs/manual_ja.md)
 
 ## ビルド
 
-```sh
-make build    # ./gnodeb（静的リンクのバイナリ）
-make test
-```
-
-Makefile はオフラインでビルドします（`GOPROXY=off`）。Go のモジュールキャッシュに依存モジュールがまだ無い環境では、最初に一度だけ次を実行します。
+Ubuntu 24.04 以降を想定しています（Go 1.22 以降が必要です）。
 
 ```sh
-make GOPROXY=https://proxy.golang.org,direct
+sudo apt update
+sudo apt install -y git make golang-go
+
+git clone <このリポジトリの URL> kronos-5g-emulator
+cd kronos-5g-emulator
+make build GOPROXY=https://proxy.golang.org,direct
 ```
 
-## 使い方
+- できるのはリポジトリ直下の `./gnodeb` だけです（静的リンクの 1 ファイル。Web コンソールも入っています）。
+- 依存モジュールの取得のため、初回は `GOPROXY` を付けます。2 回目以降は `make build` だけでビルドできます（Makefile はオフラインでビルドします）。
+- `golang-go` が 1.22 より古いディストリビューションでは、[go.dev](https://go.dev/dl/) の Go を使ってください。
 
-`config/config.yaml`（AMF・UPF のアドレス、PLMN、加入者の鍵など）を編集します。そのあと、ファイルを検証してから起動します。
+## 起動
 
-```sh
-./gnodeb check -c config/config.yaml   # config.yaml・signal.txt・scenario.txt を検証する
-./gnodeb -c config/config.yaml         # 起動して、gnodeb> にコマンドを入力する
-```
+1. SCTP をカーネルで使えるようにします（一度だけ）。
 
-コマンドの例:
+   ```sh
+   sudo modprobe sctp
+   ```
 
-```
-gnodeb> linkup                                   # AMF に接続する。以降はシナリオが動く
-gnodeb> ping(10.10.10.20, 5)
-gnodeb> iperf(10.10.10.20, 5201, 100M, 10s, dl)
-gnodeb> target(208930000000001).send(AN_UEContextReleaseRequest)
-gnodeb> help
-```
+   モジュールが見つからない場合は、`sudo apt install -y linux-modules-extra-$(uname -r)` を実行してから、もう一度試します。
 
-- **Web コンソール:** config の `gnodeb.web.src` で待ち受けます。
-- **ほかの起動のしかた:** `--no-cui` は CUI なしで常駐し、`--exec ファイル` はバッチを実行して終了します。
-- **出力先:** ログとトレースは、カレントディレクトリの `log/` に出ます。
+2. `config/config.yaml` を環境に合わせて編集します（AMF のアドレス `gnodeb.ngap.dst`、自局のアドレス `gnodeb.ngap.src` / `gnodeb.gtpu.src`、PLMN、加入者の IMSI と鍵など）。
 
-### TUN デバイス（`ue.tun`）
+3. 設定を検証してから起動します。
 
-config の `ue:` に `tun: true` を書くと、PDU セッションを持つ UE ごとに、UE のアドレスを持つ TUN デバイス（先頭の加入者は `kronos-ue1`）をホストに作ります。あわせて、そのアドレスから送る通信をデバイスに流す送信元ルールも作ります。作成には `CAP_NET_ADMIN` が要ります。
+   ```sh
+   ./gnodeb check -c config/config.yaml
+   ./gnodeb -c config/config.yaml
+   ```
 
-```sh
-make setcap     # ビルドしてから sudo setcap cap_net_admin+ep ./gnodeb を実行する（ビルドのたびに必要）
-```
+4. `gnodeb>` のプロンプトで `linkup` と入力すると AMF に接続し、シナリオが動き始めます。`help` でコマンドの一覧、Ctrl-D で終了です。
 
-セッションがある間に、UE のアドレスに bind してプログラムを動かします。
-
-```sh
-iperf3 -c 10.10.10.20 -B 10.60.0.1 -t 10        # TCP の上り
-iperf3 -c 10.10.10.20 -B 10.60.0.1 -t 10 -R     # TCP の下り
-```
-
-コマンド `iperftcp` を使うと、同じ TCP の試験を gnodeb から実行できます。シナリオからも使えます。
-
-```
-gnodeb> iperftcp(10.10.10.20, 5201, 0, 10s, ul)  # 帯域 0 は TCP の流せるだけ
-```
-
-デバイスは、セッションがなくなったとき（解放や登録解除）、`linkdown`、gnodeb の終了で消えます。
+`gnodeb.web.src` を設定していれば、ブラウザで `http://<gnodeb.web.src のアドレス>:<ポート>/` を開くと Web コンソールからも操作できます。
 
 ## ライセンス
 
-Copyright 2026 Kronos Systems。Apache License 2.0 で公開しています。[LICENSE](LICENSE) と [NOTICE](NOTICE) を参照してください。
+Apache License 2.0（[LICENSE](LICENSE)、[NOTICE](NOTICE)）

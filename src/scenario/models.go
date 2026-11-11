@@ -37,19 +37,52 @@ type Block struct {
 	Pos      diag.Pos
 	Entry    *Entry
 	Handlers []*Handler
+	Expires  []*Expire
+	Syncs    []*SyncHandler
+}
+
+// SyncHandler runs when another pseudo-call sends a message of its kind:
+// sync_receive(SYNC|HO) { body }.
+type SyncHandler struct {
+	Pos  diag.Pos
+	Kind string
+	Body []Stmt
+}
+
+// Expire runs when the timer of its variable runs out: expire(t) { body }.
+type Expire struct {
+	Pos  diag.Pos
+	Var  string
+	Body []Stmt
 }
 
 // Entry runs when the node connects (node) or a subscriber enters the state.
 type Entry struct {
-	Pos   diag.Pos
-	Calls []command.Call
+	Pos  diag.Pos
+	Body []Stmt
 }
 
-// Handler is receive(trigger) { calls }.
+// Handler is receive(trigger) { body }.
 type Handler struct {
 	Pos     diag.Pos
 	Trigger Trigger
-	Calls   []command.Call
+	Body    []Stmt
+}
+
+// Stmt is one statement of a body: a command call, or an if when If is set.
+type Stmt struct {
+	Call command.Call
+	If   *If
+}
+
+// If is if (Cond) { Then } else { Else }. An else if is an If alone in
+// Else, with ElseIf set so that it prints as written.
+type If struct {
+	Pos    diag.Pos
+	Cond   command.Expr
+	Then   []Stmt
+	Else   []Stmt
+	ElseIf bool
 }
 
 // Trigger is `NGAP[:NAS]` as written in receive().
@@ -207,4 +240,11 @@ type viewer struct {
 type ctx struct {
 	nas, outer string
 	base       string // the path of the innermost NAS message ("" for NGAP fields)
+}
+
+// ieTag is what the ngap struct tag of an IE says (schema.go).
+type ieTag struct {
+	id          int64
+	criticality string
+	mandatory   bool
 }

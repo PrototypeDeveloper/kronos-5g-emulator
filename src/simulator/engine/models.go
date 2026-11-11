@@ -17,6 +17,7 @@ import (
 	"kronos/simulator/role"
 	"kronos/state"
 	"kronos/traffic"
+	"kronos/transport/peer"
 	"kronos/transport/sctp"
 )
 
@@ -34,6 +35,9 @@ type Engine struct {
 	snap         bool
 	nodeHandlers map[string]*scenario.Handler // by canonical NGAP name
 	subs         []*subscriber
+	nodeMapOff   atomic.Uint32 // models.MapOff of the node's signals (kept across linkdown)
+	controls     *controls     // the turns of control()
+	peer         *peer.Client  // sync_send; nil without gnodeb.http
 	routes       *routes
 	uplane       *uplane
 	openTUN      tunOpener                       // nil without ue.tun
@@ -54,11 +58,20 @@ type consoleEnv struct {
 	out *strings.Builder
 }
 
+// controls paces the control(n) statements of the scenario: the turn last
+// given at each (by its position), shared by all subscribers.
+type controls struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+	cut  chan struct{} // closed when the link goes down, which ends the waits
+}
+
 // varStore holds the public variables, shared by the whole pseudo-call. Each
-// access is atomic.
+// access is atomic, and so is each set (assign).
 type varStore struct {
-	mu sync.Mutex
-	m  map[string]command.Value
+	mu       sync.Mutex
+	m        map[string]command.Value
+	assignMu sync.Mutex // one set at a time: its value is computed and stored under it
 }
 
 // routes maps the UE NGAP IDs of current UE associations to subscribers,
@@ -68,6 +81,16 @@ type routes struct {
 	ran    map[int64]*subscriber
 	amf    map[int64]*subscriber
 	paging map[string]*subscriber
+	// awaitHO are the subscribers that took a handover context over
+	// (sync_receive(HO)) and wait for the AMF's HandoverRequest, oldest first.
+	awaitHO []hoWait
+}
+
+// hoWait is a subscriber waiting for its HandoverRequest, with the uplink
+// TEIDs of its sessions, by which the request is matched to it.
+type hoWait struct {
+	s       *subscriber
+	ulTEIDs []uint32
 }
 
 // The event bus.
@@ -100,6 +123,7 @@ type node struct {
 	lastMsg     string
 	subsStarted bool
 	outStreams  uint16 // fixed for the association; read by subscriber actors
+	timers      timers // the node's scenario timers (public variables)
 
 	mu     sync.Mutex // guards status for snapshots taken by other goroutines
 	status models.NodeStatus
@@ -132,6 +156,11 @@ type startMsg struct{}
 // resetMsg makes the actor return to its initial state (the link went down).
 type resetMsg struct{}
 
+// releaseMsg ends the subscriber's UE association (NG Reset); its NAS state stays.
+type releaseMsg struct {
+	why string
+}
+
 // ueRx is a UE-associated PDU routed to this subscriber, already decoded.
 type ueRx struct {
 	msg  any
@@ -153,11 +182,13 @@ type subscriber struct {
 
 	state   string
 	vars    map[string]command.Value
+	mapOff  atomic.Uint32 // models.MapOff: the mapping items off for this subscriber (kept across linkdown)
 	lastMsg string
 	moved   string                  // the last move() target, whose entry runs after the handler
 	tunnels map[uint8]models.Tunnel // active PDU session tunnels by session ID
 	stack   *traffic.Stack          // the UE's IP endpoints (ping, iperf); safe for concurrent use
 	runs    trafficRuns             // the pings and iperfs running
+	timers  timers                  // the running scenario timers (timer(t))
 	tun     atomic.Pointer[ueTUN]   // the host TUN device (ue.tun); the N3 reader writes to it
 
 	// stat is the snapshot the web console reads without stopping the actor;
@@ -211,4 +242,29 @@ type dlRoute struct {
 type sessionKey struct {
 	s  *subscriber
 	id uint8
+}
+
+// Scenario timers (timer.go).
+
+// timerRun is a running timer; gen tells a late expiry of an earlier run apart.
+type timerRun struct {
+	t   *time.Timer
+	gen uint64
+}
+
+// syncMsg hands an actor a message of another pseudo-call (sync_receive).
+type syncMsg struct {
+	m models.SyncMessage
+}
+
+// timerMsg tells an actor that the timer of a variable ran out.
+type timerMsg struct {
+	name string
+	gen  uint64
+}
+
+// timers are the running timers of an actor (a subscriber or the node).
+type timers struct {
+	runs map[string]*timerRun
+	gen  uint64
 }

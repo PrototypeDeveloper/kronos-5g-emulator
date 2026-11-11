@@ -22,6 +22,14 @@ const (
 	identityTypeSUCI byte = 0x01
 	// identityTypeIMEISV is the type of identity IMEISV (with the odd/even indicator clear).
 	identityTypeIMEISV byte = 0x05
+	// identityTypeIMEI is the type of identity IMEI, with the odd indicator (15 digits).
+	identityTypeIMEI byte = 0x08 | 0x03
+	// imeiBodyDigits is the number of digits of an IMEI before its check digit (TAC and SNR).
+	imeiBodyDigits = 14
+	// luhnWeight doubles every second digit of the IMEI check digit (TS 23.003 annex B).
+	luhnWeight = 2
+	// decimalBase is the base of the digits.
+	decimalBase = 10
 	// bcdFiller pads BCD digits to a whole number of nibbles.
 	bcdFiller = 0xf
 )

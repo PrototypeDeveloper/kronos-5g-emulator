@@ -61,3 +61,6 @@ const (
 	tunTable    = 10000
 	tunPriority = 1000
 )
+
+// timeLayout is how the builtin $time shows the current time.
+const timeLayout = "15:04:05.000"

@@ -60,7 +60,7 @@ gnodeb:
 	}
 	msg, _ := libngap.Decode(sig.Bytes)
 	name := msg.(*ngapMessage.NGSetupRequest).RANNodeName.Value
-	if err := r.PatchNode(msg); err != nil {
+	if err := r.PatchNode(msg, models.NodeBuild{}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := libngap.Encode(msg)

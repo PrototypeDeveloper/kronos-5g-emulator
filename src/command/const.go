@@ -19,6 +19,8 @@ const (
 	KindCommand             // command name (the argument of help)
 	KindRate                // bit rate as iperf writes it: 100M, 1G, 500k (or bit/s as an int)
 	KindChoice              // one of the words in Arg.Choices (ul / dl ...)
+	KindVar                 // the name of a variable (timer, stoptimer)
+	KindAssign              // var = expression (set)
 )
 
 // Command scopes.
@@ -27,6 +29,9 @@ const (
 	ScopeUE                         // runs on a subscriber; on the command line target() picks one, otherwise all
 	ScopeConsole                    // acts on the pseudo-call as a whole (help, linkup); target() is not allowed
 	ScopeBySignal                   // send: ScopeUE for a UE-associated signal, ScopeNode otherwise
+	ScopeByVar                      // timer, stoptimer: ScopeNode for a public variable, ScopeUE for a private one
+	ScopeByAssign                   // set: in a scenario the block's; on the command line ScopeConsole for a public variable, ScopeUE for a private one
+	ScopeByTarget                   // mapon, mapoff, mapget: in a scenario the block's; on the command line ScopeUE with target(), otherwise ScopeConsole (the node and every subscriber)
 )
 
 // Places where a command may be written.
@@ -42,6 +47,7 @@ const (
 	TypeFloat
 	TypeString
 	TypeDuration
+	TypeBool // the result of a comparison; variables cannot have it
 )
 
 // Token kinds.
@@ -62,6 +68,19 @@ const (
 	TokColon
 	TokAssign
 	TokStar
+	TokPlus
+	TokMinus
+	TokSlash
+	TokPercent
+	TokEq      // ==
+	TokNe      // !=
+	TokLt      // <
+	TokLe      // <=
+	TokGt      // >
+	TokGe      // >=
+	TokAnd     // &&
+	TokOr      // ||
+	TokNot     // !
 	TokIllegal // Text holds the error message
 )
 
@@ -70,6 +89,21 @@ const (
 	ExprIdent   ExprKind = iota // a name; the parameter kind decides whether it is a signal, state, variable or command
 	ExprBuiltin                 // $name
 	ExprLiteral                 // int, float, string or duration
+	ExprParen                   // ( X )
+	ExprUnary                   // Op X: -a, !(a == 1)
+	ExprBinary                  // X Op Y: a + 5, a == 1, a > 0 && b < 3
+	ExprAssign                  // Name = Y (only the argument of set)
+)
+
+// Precedence of the binary operators, as in C: a higher one binds tighter.
+const (
+	precNone = iota // not a binary operator
+	precOr          // ||
+	precAnd         // &&
+	precEq          // == !=
+	precCmp         // < <= > >=
+	precAdd         // + -
+	precMul         // * / %
 )
 
 // The snap format.
@@ -95,9 +129,14 @@ const (
 	waitMaxTime = time.Hour // the longest wait
 )
 
-// Subscribers.
+// Two-character operators (==, !=, <=, >=, &&, ||).
 const (
-	imsiDigits = 15 // the number of digits of an IMSI given to target()
+	opPairLen = 2 // their length
+)
+
+// Limits of control.
+const (
+	controlMaxRate = 1_000_000 // passes per second; 0 means no limit
 )
 
 // "Did you mean" hints: the edit distance accepted as a typo is one edit per

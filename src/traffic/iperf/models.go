@@ -137,3 +137,10 @@ type receiverSnapshot struct {
 	bytes, datagrams, count, lost, outOfOrder uint64
 	jitter                                    float64
 }
+
+// ctlRead is one octet read from the control connection during a TCP test.
+type ctlRead struct {
+	n   int
+	b   byte
+	err error
+}

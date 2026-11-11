@@ -27,17 +27,31 @@ func Validate(f *File, sigs *SignalSet, opt models.ValidateOptions) diag.List {
 			v.ds.Errorf(f.States[0].Pos, "there is no initial state start (subscribers begin in start)")
 		}
 	}
-	// Check each block's entry and handlers; seen catches repeated triggers.
+	// Check each block's entry and handlers; seen catches repeated triggers,
+	// bad collects the expire blocks with an error.
+	bad := map[*Expire]bool{}
 	for _, b := range f.Blocks() {
 		seen := map[string]*Handler{}
 		if b.Entry != nil {
-			v.checkCalls(b, b.Entry.Calls)
+			v.checkBody(b, b.Entry.Body)
 		}
 		for _, h := range b.Handlers {
 			v.checkTrigger(b, h, seen)
-			v.checkCalls(b, h.Calls)
+			v.checkBody(b, h.Body)
+		}
+		for _, x := range b.Expires {
+			if !v.checkExpire(b, x) {
+				bad[x] = true
+			}
+			v.checkBody(b, x.Body)
+		}
+		for _, x := range b.Syncs {
+			v.checkSync(b, x)
+			v.checkBody(b, x.Body)
 		}
 	}
+	v.checkSyncConfig(opt)
+	v.checkTimers(bad)
 	v.reportUsage()
 	// Note snap calls that do not run because base.snap is off.
 	n, first := 0, diag.Pos{}
@@ -66,12 +80,19 @@ func (v *validator) checkVars() {
 	}
 }
 
-// checkCalls checks each call against the command registry in the block's scope.
-func (v *validator) checkCalls(b *Block, calls []command.Call) {
+// checkBody checks each call against the command registry in the block's
+// scope, and the conditions and bodies of if.
+func (v *validator) checkBody(b *Block, body []Stmt) {
 	ctx := command.Context{Where: command.InScenario, Scope: b.Scope()}
-	for _, c := range calls {
-		_, _, ds := command.Check(c, ctx, v)
-		v.ds = append(v.ds, ds...)
+	for _, st := range body {
+		if st.If == nil {
+			_, _, ds := command.Check(st.Call, ctx, v)
+			v.ds = append(v.ds, ds...)
+			continue
+		}
+		v.ds = append(v.ds, command.CheckCond(st.If.Cond, v, b.Scope())...)
+		v.checkBody(b, st.If.Then)
+		v.checkBody(b, st.If.Else)
 	}
 }
 
@@ -207,4 +228,80 @@ func (v *validator) Names(k command.Kind) []string {
 		sort.Strings(out)
 	}
 	return out
+}
+
+// checkExpire: expire(t) names a duration variable of the block's subject
+// (private for a subscriber, public for the node). It reports whether it is fine.
+func (v *validator) checkExpire(b *Block, x *Expire) bool {
+	n := len(v.ds)
+	vr, ok := v.vars[x.Var]
+	switch {
+	case !ok:
+		v.ds.Errorf(x.Pos, "expire(%s): variable %s is not declared in var", x.Var, x.Var)
+	case vr.Init.Type != command.TypeDuration:
+		v.ds.Errorf(x.Pos, "expire(%s): %s is not a duration variable (declare it like private %s = 5s)", x.Var, x.Var, x.Var)
+	case b.Kind == BlockNode && !vr.Public:
+		v.ds.Errorf(x.Pos, "expire(%s) in node: the node's timers are public variables (%s is private)", x.Var, x.Var)
+	case b.Kind != BlockNode && vr.Public:
+		v.ds.Errorf(x.Pos, "expire(%s) in %s: a subscriber's timers are private variables (%s is public: handle it in node)", x.Var, b.Name, x.Var)
+	}
+	return len(v.ds) == n
+}
+
+// checkTimers warns about an expire(t) that no timer(t) starts (except the
+// bad ones, already reported), and notes a timer(t) that no expire(t) handles.
+func (v *validator) checkTimers(bad map[*Expire]bool) {
+	started := map[string]bool{}
+	v.f.Calls(func(_ *Block, c command.Call) {
+		if c.Name == "timer" && len(c.Args) == 1 {
+			started[c.Args[0].Name] = true
+		}
+	})
+	handled := map[string]bool{}
+	for _, b := range v.f.Blocks() {
+		for _, x := range b.Expires {
+			handled[x.Var] = true
+			if !started[x.Var] && !bad[x] {
+				v.ds.Warnf(x.Pos, "expire(%s) never runs from the scenario: no timer(%s) starts it (it can be started from the CUI/GUI)", x.Var, x.Var)
+			}
+		}
+	}
+	v.f.Calls(func(_ *Block, c command.Call) {
+		if c.Name == "timer" && len(c.Args) == 1 && !handled[c.Args[0].Name] {
+			v.ds.Infof(c.Pos, "timer(%s) has no expire(%s): it runs out without doing anything", c.Args[0].Name, c.Args[0].Name)
+			handled[c.Args[0].Name] = true
+		}
+	})
+}
+
+// checkSync: sync_receive takes SYNC or HO, and HO is a subscriber's.
+func (v *validator) checkSync(b *Block, x *SyncHandler) {
+	switch {
+	case x.Kind != models.SyncKindSync && x.Kind != models.SyncKindHO:
+		v.ds.Errorf(x.Pos, "sync_receive(%s): the kind is %s or %s", x.Kind, models.SyncKindSync, models.SyncKindHO)
+	case x.Kind == models.SyncKindHO && b.Kind == BlockNode:
+		v.ds.Errorf(x.Pos, "sync_receive(HO) in node: a handover is a subscriber's (write it in a state block or any)")
+	}
+}
+
+// checkSyncConfig warns when the scenario talks to other pseudo-calls but
+// the config has no gnodeb.http to do it from.
+func (v *validator) checkSyncConfig(opt models.ValidateOptions) {
+	if opt.Sync {
+		return
+	}
+	var at *diag.Pos
+	for _, b := range v.f.Blocks() {
+		if len(b.Syncs) > 0 && at == nil {
+			at = &b.Syncs[0].Pos
+		}
+	}
+	v.f.Calls(func(_ *Block, c command.Call) {
+		if c.Name == "sync_send" && at == nil {
+			at = &c.Pos
+		}
+	})
+	if at != nil {
+		v.ds.Warnf(*at, "sync_send / sync_receive need gnodeb.http.src in the config (the address the pseudo-calls talk on)")
+	}
 }

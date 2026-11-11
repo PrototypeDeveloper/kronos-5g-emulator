@@ -28,7 +28,7 @@ func load(cfgPath string) (*state.Config, *scenario.SignalSet, *scenario.File, d
 	f, ds := scenario.ReadScenario(cfg.ScenarioPath())
 	all = append(all, ds...)
 	if f != nil {
-		all = append(all, scenario.Validate(f, sigs, models.ValidateOptions{SnapEnabled: cfg.Base.Snap})...)
+		all = append(all, scenario.Validate(f, sigs, models.ValidateOptions{SnapEnabled: cfg.Base.Snap, Sync: cfg.SyncListen() != nil})...)
 	}
 	return cfg, sigs, f, all
 }
@@ -82,10 +82,16 @@ func describe(w io.Writer, cfg *state.Config, sigs *scenario.SignalSet, f *scena
 	for _, b := range f.Blocks() {
 		fmt.Fprintf(w, "  %s\n", b.Name)
 		if b.Entry != nil {
-			fmt.Fprintf(w, "    entry → %s\n", calls(b.Entry.Calls))
+			fmt.Fprintf(w, "    entry → %s\n", calls(b.Entry.Body))
 		}
 		for _, h := range b.Handlers {
-			fmt.Fprintf(w, "    receive(%s) → %s\n", h.Trigger, calls(h.Calls))
+			fmt.Fprintf(w, "    receive(%s) → %s\n", h.Trigger, calls(h.Body))
+		}
+		for _, x := range b.Expires {
+			fmt.Fprintf(w, "    expire(%s) → %s\n", x.Var, calls(x.Body))
+		}
+		for _, x := range b.Syncs {
+			fmt.Fprintf(w, "    sync_receive(%s) → %s\n", x.Kind, calls(x.Body))
 		}
 	}
 	fmt.Fprintln(w)

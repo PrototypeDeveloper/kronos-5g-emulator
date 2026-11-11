@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kronos/common/diag"
+	"kronos/models"
 )
 
 // String returns "sst" or "sst/sd".
@@ -54,7 +55,7 @@ func (c *Config) SubscriberIMSI(n int) (string, error) {
 	if plen != mccDigits+mncMinDigits && plen != mccDigits+mncMaxDigits {
 		plen = mccDigits + mncMinDigits
 	}
-	if len(imsi) <= plen || !isDigits(imsi, 1, imsiDigits) {
+	if len(imsi) <= plen || !isDigits(imsi, 1, models.IMSIDigits) {
 		return "", fmt.Errorf("invalid IMSI %q", imsi)
 	}
 	msin := imsi[plen:]
@@ -72,7 +73,7 @@ func (c *Config) SubscriberIMSI(n int) (string, error) {
 // SubscriberIndex returns the 0-based index of imsi among the subscribers.
 func (c *Config) SubscriberIndex(imsi string) (int, bool) {
 	first, err := c.SubscriberIMSI(0)
-	if err != nil || len(imsi) != len(first) || !isDigits(imsi, 1, imsiDigits) {
+	if err != nil || len(imsi) != len(first) || !isDigits(imsi, 1, models.IMSIDigits) {
 		return 0, false
 	}
 	a, _ := strconv.ParseUint(first, 10, 64)
@@ -216,9 +217,6 @@ func (c *Config) normalize(ds *diag.List, loc *locator) {
 	if c.GNodeB.GNodeBIDLength == 0 {
 		c.GNodeB.GNodeBIDLength = defaultGNBIDLength
 	}
-	if c.GNodeB.HTTP != nil {
-		ds.Infof(loc.pos("gnodeb.http"), "gnodeb.http (between emulators, for handover) is not used yet")
-	}
 }
 
 // validate checks every value and reports problems at the position of their key.
@@ -245,7 +243,7 @@ func (c *Config) validate(ds *diag.List, loc *locator) {
 
 	// Subscribers: the IMSI, the range of consecutive IMSIs and the IMEISV.
 	ue := c.UE
-	imsiOK := isDigits(ue.IMSI, imsiDigits, imsiDigits)
+	imsiOK := isDigits(ue.IMSI, models.IMSIDigits, models.IMSIDigits)
 	if !imsiOK {
 		ds.Errorf(at("ue.imsi"), "ue.imsi must be 15 digits (%q)", ue.IMSI)
 	}
@@ -383,6 +381,15 @@ func (c *Config) validate(ds *diag.List, loc *locator) {
 	if g.HTTP != nil {
 		checkEndpoint(ds, at("gnodeb.http"), "gnodeb.http.src", g.HTTP.Src, true, true)
 	}
+}
+
+// SyncListen returns gnodeb.http.src, where the pseudo-calls talk to each
+// other (sync_send / sync_receive), or nil.
+func (c *Config) SyncListen() *Endpoint {
+	if c.GNodeB.HTTP == nil {
+		return nil
+	}
+	return c.GNodeB.HTTP.Src
 }
 
 // WebListen returns where the web console listens, or nil when gnodeb.web is not set.

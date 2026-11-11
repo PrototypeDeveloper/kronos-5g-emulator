@@ -63,7 +63,7 @@ func (e *Engine) Reload() error {
 	if ds.HasErrors() {
 		return fmt.Errorf("%s has errors, so nothing is reloaded: %s", path, errorsOf(ds))
 	}
-	if vs := scenario.Validate(e.scen, set, models.ValidateOptions{SnapEnabled: e.snap}); vs.HasErrors() {
+	if vs := scenario.Validate(e.scen, set, models.ValidateOptions{SnapEnabled: e.snap, Sync: e.peer != nil}); vs.HasErrors() {
 		return fmt.Errorf("the scenario does not fit the signals of %s, so nothing is reloaded: %s", path, errorsOf(vs))
 	}
 	warnings := append(ds, set.Compare(Reference(e.cfg))...)
@@ -185,4 +185,10 @@ func (e *Engine) SaveSignal(name, hexText, modeText string, add bool) (models.Si
 	e.publish(models.Event{Kind: models.KindInfo, Source: models.SourceNode,
 		Text: fmt.Sprintf("%s: %s %s (reload sends it)", path, name, verb)})
 	return e.SignalFile()
+}
+
+// SignalTypes lists what the signal editor creates.
+func (e *Engine) SignalTypes() models.SignalTypes {
+	ngap, gmm, gsm := scenario.SignalTypes()
+	return models.SignalTypes{NGAP: ngap, GMM: gmm, GSM: gsm}
 }

@@ -146,8 +146,9 @@ type BlockInfo struct {
 	Handlers []HandlerInfo `json:"handlers,omitempty"`
 }
 
-// HandlerInfo is one receive() handler.
+// HandlerInfo is one receive() handler, or an expire() one.
 type HandlerInfo struct {
+	Kind    string   `json:"kind,omitempty"` // "expire" (timer), "sync_receive" (another pseudo-call); receive otherwise
 	Trigger string   `json:"trigger"`
 	Line    int      `json:"line"`
 	Calls   []string `json:"calls"`
@@ -183,16 +184,18 @@ type EditNode struct {
 	Bits  int    `json:"bits,omitempty"`
 	// Min and Max bound the value (int) or the size (octets, bits,
 	// string, list); Ext allows more (an extensible constraint).
-	Min  *int64      `json:"min,omitempty"`
-	Max  *int64      `json:"max,omitempty"`
-	Ext  bool        `json:"ext,omitempty"`
-	Del  string      `json:"del,omitempty"`  // the path that remove takes: an optional field or a list item
-	Add  []string    `json:"add,omitempty"`  // struct: the optional fields that are absent
-	Alts []string    `json:"alts,omitempty"` // choice: the alternatives
-	Alt  string      `json:"alt,omitempty"`  // choice: the one chosen
-	Auto bool        `json:"auto,omitempty"` // mapped: replaced when the signal is sent (still editable)
-	Note string      `json:"note,omitempty"`
-	Kids []*EditNode `json:"c,omitempty"`
+	Min  *int64       `json:"min,omitempty"`
+	Max  *int64       `json:"max,omitempty"`
+	Ext  bool         `json:"ext,omitempty"`
+	Del  string       `json:"del,omitempty"`  // the path that remove takes: an optional field or a list item
+	Add  []string     `json:"add,omitempty"`  // struct: the optional fields that are absent
+	Alts []string     `json:"alts,omitempty"` // choice: the alternatives
+	NAS  string       `json:"nas,omitempty"`  // container: the NAS messages it takes (5gmm, 5gsm)
+	Enum []EnumOption `json:"enum,omitempty"` // int: the named values of an ENUMERATED
+	Alt  string       `json:"alt,omitempty"`  // choice: the one chosen
+	Auto bool         `json:"auto,omitempty"` // mapped: replaced when the signal is sent (still editable)
+	Note string       `json:"note,omitempty"`
+	Kids []*EditNode  `json:"c,omitempty"`
 }
 
 // DiagText is a problem found in a signal or in signal.txt.
@@ -323,6 +326,7 @@ type SignalReference struct {
 // ValidateOptions are the config settings that affect validation.
 type ValidateOptions struct {
 	SnapEnabled bool // base.snap
+	Sync        bool // gnodeb.http is set: sync_send and sync_receive can work
 }
 
 // Parsed packets of the UE IP stack (package traffic).
@@ -373,4 +377,82 @@ type SCTPInfo struct {
 // WebOptions are the settings of the console.
 type WebOptions struct {
 	Version string // shown in the GUI
+}
+
+// SignalTypes are what the signal editor creates: NGAP messages, and the
+// NAS messages of NAS-PDUs and NAS containers.
+type SignalTypes struct {
+	NGAP []string `json:"ngap"`
+	GMM  []string `json:"gmm"` // 5GMM
+	GSM  []string `json:"gsm"` // 5GSM
+}
+
+// EnumOption is a named value of an ENUMERATED type.
+type EnumOption struct {
+	Value int64  `json:"v"`
+	Name  string `json:"n"`
+	Ext   bool   `json:"ext,omitempty"` // an extension value
+}
+
+// Messages between pseudo-calls (HTTP/REST, JSON).
+
+// SyncMessage is one message from a pseudo-call to another (sync_send).
+type SyncMessage struct {
+	Kind     string     `json:"kind"`               // SYNC or HO
+	From     string     `json:"from"`               // gnodeb.http.src of the sender
+	IMSI     string     `json:"imsi,omitempty"`     // the subscriber it is for; none: the node
+	Handover *HOContext `json:"handover,omitempty"` // HO: the subscriber's mapping context
+}
+
+// SyncReply is the answer to a SyncMessage.
+type SyncReply struct {
+	Accepted bool   `json:"accepted"`
+	Error    string `json:"error,omitempty"`
+}
+
+// HOContext is what the target pseudo-call needs to go on mapping the
+// signals of a subscriber after a handover. Byte strings are in hex.
+type HOContext struct {
+	// AMFUENGAPID is the AMF-UE-NGAP-ID at the source: the target names it
+	// in PathSwitchRequest (Xn handover).
+	AMFUENGAPID *int64      `json:"amfUeNgapId,omitempty"`
+	Registered  bool        `json:"registered"`
+	GUTI        string      `json:"guti,omitempty"` // 5GS mobile identity value of the 5G-GUTI
+	NgKSI       uint8       `json:"ngKSI"`          // from the network (TSC and KSI)
+	Kamf        string      `json:"kamf,omitempty"`
+	Security    *HOSecurity `json:"security,omitempty"` // none: no NAS security context yet
+	Sessions    []HOSession `json:"sessions,omitempty"`
+	NextPTI     uint8       `json:"nextPTI"`
+}
+
+// HOSecurity is the NAS security context of a subscriber.
+type HOSecurity struct {
+	Integrity     uint8  `json:"integrity"` // 5G-IA algorithm
+	Ciphering     uint8  `json:"ciphering"` // 5G-EA algorithm
+	KnasInt       string `json:"knasInt"`
+	KnasEnc       string `json:"knasEnc"`
+	UplinkCount   uint32 `json:"uplinkCount"` // the next unused NAS COUNTs
+	DownlinkCount uint32 `json:"downlinkCount"`
+}
+
+// HOSession is one PDU session of a subscriber.
+type HOSession struct {
+	ID     uint8  `json:"id"`
+	UEIP   string `json:"ueIp,omitempty"`
+	UPF    string `json:"upf,omitempty"` // N3 address of the UPF
+	ULTEID uint32 `json:"ulTeid"`
+	QFIs   []int  `json:"qfi,omitempty"` // ints: a []uint8 would be base64 in JSON
+}
+
+// NodeBuild is what the role needs to fix a node signal before it is sent.
+type NodeBuild struct {
+	Off          MapOff          // the mapping items that are off
+	Associations []UEAssociation // the current UE associations (NGReset)
+}
+
+// UEAssociation is the NGAP IDs of one UE association.
+type UEAssociation struct {
+	RANUENGAPID int64
+	AMFUENGAPID int64
+	HasAMF      bool
 }

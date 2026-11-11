@@ -91,30 +91,45 @@ func (u *UE) patchULNASTransport(t *nasMessage.ULNASTransport) error {
 	}
 	conf, configured := u.r.sessionConf(t.PayloadContainer[1])
 	id := conf.id
+	// With session off the IDs and PTI are sent as written, and the
+	// procedure is followed with them.
+	on := u.off.On(models.MapSession)
 	switch m := inner.(type) {
 	case *nasMessage.PDUSessionEstablishmentRequest:
-		m.PDUSessionID, m.ProcedureTransactionID = id, u.allocPTI()
-		if m.HasPDUSessionType && conf.pduType != 0 {
-			m.PDUSessionType.Value = conf.pduType
+		if on {
+			m.PDUSessionID, m.ProcedureTransactionID = id, u.allocPTI()
+			if m.HasPDUSessionType && conf.pduType != 0 {
+				m.PDUSessionType.Value = conf.pduType
+			}
 		}
-		u.session(id).pti = m.ProcedureTransactionID
+		u.session(m.PDUSessionID).pti = m.ProcedureTransactionID
 	case *nasMessage.PDUSessionReleaseRequest:
-		m.PDUSessionID, m.ProcedureTransactionID = id, u.allocPTI()
-		u.session(id).pti = m.ProcedureTransactionID
+		if on {
+			m.PDUSessionID, m.ProcedureTransactionID = id, u.allocPTI()
+		}
+		u.session(m.PDUSessionID).pti = m.ProcedureTransactionID
 	case *nasMessage.PDUSessionReleaseComplete:
-		m.PDUSessionID, m.ProcedureTransactionID = id, u.session(id).relPTI
+		if on {
+			m.PDUSessionID, m.ProcedureTransactionID = id, u.session(id).relPTI
+		}
+	case *nasMessage.Status5GSM:
+		if on {
+			m.PDUSessionID = id // the PTI stays: it names the message the status is about
+		}
 	}
-	if t.PayloadContainer, err = libnas.Encode(inner, nil); err != nil {
-		return err
+	if on {
+		if t.PayloadContainer, err = libnas.Encode(inner, nil); err != nil {
+			return err
+		}
+		if t.HasPDUSessionID {
+			t.PDUSessionID.Value = id
+		}
+		if configured && t.HasDNN && conf.dnn != nil {
+			t.DNN.Value = append([]byte(nil), conf.dnn...)
+		}
 	}
-	if t.HasPDUSessionID {
-		t.PDUSessionID.Value = id
-	}
-	if configured && t.HasSNSSAI && conf.snssai != nil {
+	if configured && t.HasSNSSAI && conf.snssai != nil && u.off.On(models.MapSNSSAI) {
 		t.SNSSAI.Value = append([]byte(nil), conf.snssai...)
-	}
-	if configured && t.HasDNN && conf.dnn != nil {
-		t.DNN.Value = append([]byte(nil), conf.dnn...)
 	}
 	return nil
 }
@@ -164,7 +179,7 @@ func (u *UE) setupSession(id uint8, transfer []byte, in *models.Inbound) {
 			if ie.ULNGUUPTNLInformation.Present == ngapType.UPTransportLayerInformationPresentGTPTunnel {
 				g := ie.ULNGUUPTNLInformation.GTPTunnel
 				s.upf = transportAddress(g.TransportLayerAddress.Value)
-				if len(g.GTPTEID.Value) == 4 {
+				if len(g.GTPTEID.Value) == models.TEIDLen {
 					s.ulTEID = binary.BigEndian.Uint32(g.GTPTEID.Value)
 				}
 			}
@@ -216,8 +231,11 @@ func (u *UE) acceptSession(m *nasMessage.PDUSessionEstablishmentAccept, in *mode
 
 // tunnelsUp lists the sessions answered by the current setup whose user plane
 // is complete.
-func (u *UE) tunnelsUp(in *models.Inbound) {
-	for _, id := range u.pendingSetup {
+func (u *UE) tunnelsUp(in *models.Inbound) { u.tunnelsFor(u.pendingSetup, in) }
+
+// tunnelsFor lists the sessions of ids whose user plane is complete.
+func (u *UE) tunnelsFor(ids []uint8, in *models.Inbound) {
+	for _, id := range ids {
 		s := u.sessions[id]
 		if s == nil || !s.ueIP.IsValid() || !s.upf.IsValid() || s.ulTEID == 0 {
 			continue
@@ -272,10 +290,34 @@ func (r *Role) responseTransfer(template []byte, s *pdu) ([]byte, error) {
 // PDUSessionResourceSetupResponse and InitialContextSetupResponse (one item
 // per requested session, the template's first as pattern).
 func (u *UE) patchSetupLists(msg any) error {
+	if !u.off.On(models.MapTunnel) {
+		// The lists as written; the requested sessions count as answered.
+		switch msg.(type) {
+		case *ngapMessage.PDUSessionResourceSetupResponse, *ngapMessage.InitialContextSetupResponse:
+			u.pendingSetup = nil
+		}
+		return nil
+	}
 	switch m := msg.(type) {
 	case *ngapMessage.PDUSessionResourceSetupResponse:
 		if !m.HasPDUSessionResourceSetupListSURes {
-			return nil // the template leaves the list out
+			// A failure answer: the requested sessions failed and are gone.
+			if m.HasPDUSessionResourceFailedToSetupListSURes && len(u.pendingSetup) > 0 {
+				var pattern ngapType.PDUSessionResourceFailedToSetupItemSURes
+				if l := m.PDUSessionResourceFailedToSetupListSURes.List; len(l) > 0 {
+					pattern = l[0]
+				}
+				var items []ngapType.PDUSessionResourceFailedToSetupItemSURes
+				for _, id := range u.pendingSetup {
+					it := pattern
+					it.PDUSessionID.Value = int64(id)
+					items = append(items, it)
+					delete(u.sessions, id)
+				}
+				m.PDUSessionResourceFailedToSetupListSURes.List = items
+				u.pendingSetup = nil
+			}
+			return nil
 		}
 		if len(u.pendingSetup) == 0 {
 			return errors.New("no PDU session to answer (no PDUSessionResourceSetupRequest received)")
@@ -342,6 +384,16 @@ func (u *UE) established() []uint8 {
 // and the established sessions in UEContextReleaseRequest / Complete. A list
 // that would be empty is left out (it is optional).
 func (u *UE) patchReleaseLists(msg any) error {
+	if !u.off.On(models.MapTunnel) {
+		// The lists as written; the released sessions are gone all the same.
+		if _, ok := msg.(*ngapMessage.PDUSessionResourceReleaseResponse); ok {
+			for _, id := range u.pendingRelease {
+				delete(u.sessions, id)
+			}
+			u.pendingRelease = nil
+		}
+		return nil
+	}
 	switch m := msg.(type) {
 	case *ngapMessage.PDUSessionResourceReleaseResponse:
 		if len(u.pendingRelease) == 0 {

@@ -60,7 +60,9 @@ func verbAccepts(verb rune, t Type) bool {
 		return t == TypeFloat
 	case 's', 'q':
 		return t == TypeString || t == TypeDuration
-	default: // 't' needs a bool, which scenarios do not have
+	case 't':
+		return t == TypeBool
+	default:
 		return false
 	}
 }
@@ -72,23 +74,6 @@ func Format(format string, vals []Value) string {
 		args[i] = v.Interface()
 	}
 	return fmt.Sprintf(format, args...)
-}
-
-// exprType returns the static type of an argument, or TypeNone if unknown.
-func exprType(e Expr, r Resolver) Type {
-	switch e.Kind {
-	case ExprLiteral:
-		return e.Val.Type
-	case ExprBuiltin:
-		if b, ok := LookupBuiltin(e.Name); ok {
-			return b.Type
-		}
-	case ExprIdent:
-		if v, ok := r.Var(e.Name); ok {
-			return v.Type
-		}
-	}
-	return TypeNone
 }
 
 // checkSnap verifies the format and that it consumes exactly the given values.

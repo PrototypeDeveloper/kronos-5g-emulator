@@ -46,10 +46,19 @@ func HelpText(s Spec) string {
 		where = append(where, "CUI/GUI")
 	}
 	target := "no"
-	if s.Scope&(ScopeUE|ScopeBySignal) != 0 {
+	switch {
+	case s.Where&Interactive == 0:
+		target = "no (a scenario runs it on the subscriber whose handler runs)"
+	case s.Scope&(ScopeUE|ScopeBySignal|ScopeByVar|ScopeByAssign|ScopeByTarget) != 0:
 		target = "yes (without it: all subscribers)"
 		if s.Scope&ScopeBySignal != 0 {
 			target = "yes for UE signals (without it: all subscribers)"
+		}
+		if s.Scope&(ScopeByVar|ScopeByAssign) != 0 {
+			target = "yes for private variables (without it: all subscribers)"
+		}
+		if s.Scope&ScopeByTarget != 0 {
+			target = "yes (without it: the node and all subscribers)"
 		}
 	}
 	return fmt.Sprintf("%s\n  %s\n  where: %s\n  runs on: %s\n  target(IMSI): %s",

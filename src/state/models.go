@@ -108,8 +108,8 @@ type GNodeB struct {
 	SNSSAI         []SNSSAI `yaml:"snssai"`
 	TAC            TAC      `yaml:"tac"`
 
-	// HTTP is where pseudo-calls talk to each other (handover, not
-	// implemented yet); it is only checked.
+	// HTTP is where pseudo-calls talk to each other (sync_send /
+	// sync_receive: JSON over HTTP); none disables it.
 	HTTP *Listen `yaml:"http"`
 	// Web is where the web console listens; none disables it.
 	Web *Listen `yaml:"web"`

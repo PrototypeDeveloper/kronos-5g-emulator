@@ -145,10 +145,11 @@ func start(t *testing.T, snap bool, subscribers int, scen string) *harness {
 	return startN3(t, snap, subscribers, scen, 2152, 2152)
 }
 
-// startN3 also sets the GTP-U ports: the gNB's (gtpu.src) and the stub UPF's (gtpu.dst).
-func startN3(t *testing.T, snap bool, subscribers int, scen string, gtpuPort, upfPort int) *harness {
+// startN3 also sets the GTP-U ports: the gNB's (gtpu.src) and the stub UPF's
+// (gtpu.dst); extra lines go to the gnodeb section of the config.
+func startN3(t *testing.T, snap bool, subscribers int, scen string, gtpuPort, upfPort int, extra ...string) *harness {
 	t.Helper()
-	eng, amf, dir := buildEngine(t, snap, subscribers, scen, gtpuPort, upfPort)
+	eng, amf, dir := buildEngine(t, snap, subscribers, scen, gtpuPort, upfPort, extra...)
 	events, unsubscribe := eng.Events().Subscribe(1024)
 	ctx, cancel := context.WithCancel(context.Background())
 	eng.Start(ctx)
@@ -162,12 +163,16 @@ func startN3(t *testing.T, snap bool, subscribers int, scen string, gtpuPort, up
 
 // buildEngine makes an engine (not started) for a stub AMF, with the
 // config, a copy of the sample signal.txt and scen in a temporary directory.
-func buildEngine(t *testing.T, snap bool, subscribers int, scen string, gtpuPort, upfPort int) (*engine.Engine, *stubAMF, string) {
+func buildEngine(t *testing.T, snap bool, subscribers int, scen string, gtpuPort, upfPort int, extra ...string) (*engine.Engine, *stubAMF, string) {
 	t.Helper()
 	amf := newStubAMF(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(fmt.Sprintf(configTemplate, snap, subscribers, amf.l.Addr().Port(), gtpuPort, upfPort)), 0o644); err != nil {
+	text := fmt.Sprintf(configTemplate, snap, subscribers, amf.l.Addr().Port(), gtpuPort, upfPort)
+	for _, l := range extra {
+		text += "  " + l + "\n"
+	}
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sample, err := os.ReadFile("../../../config/signal.txt")
@@ -186,7 +191,7 @@ func buildEngine(t *testing.T, snap bool, subscribers int, scen string, gtpuPort
 		t.Fatal(ds)
 	}
 	f, ds := scenario.ParseScenario("test.txt", []byte(scen))
-	ds = append(ds, scenario.Validate(f, sigs, models.ValidateOptions{SnapEnabled: snap})...)
+	ds = append(ds, scenario.Validate(f, sigs, models.ValidateOptions{SnapEnabled: snap, Sync: cfg.SyncListen() != nil})...)
 	if ds.HasErrors() {
 		t.Fatal(ds)
 	}
@@ -295,7 +300,7 @@ func TestNGSetupAndLinkControl(t *testing.T) {
 		"target(208930000000001).send(NGSetupRequest)": "cannot take target",
 		"send(NoSuchSignal)":                           "not in signal.txt",
 		"linkup":                                       "already connected",
-		"bogus(":                                       "an argument is needed",
+		"bogus(":                                       "a value is needed",
 	} {
 		if _, err := h.eng.Exec(line); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: want %q, got %v", line, want, err)

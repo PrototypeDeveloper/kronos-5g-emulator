@@ -106,23 +106,20 @@ func (e *Engine) Scenario() models.ScenarioInfo {
 			bi.Kind = "state"
 		}
 		if b.Entry != nil {
-			bi.Entry = callStrings(b.Entry.Calls)
+			bi.Entry = scenario.StmtLines(b.Entry.Body)
 		}
 		for _, h := range b.Handlers {
-			bi.Handlers = append(bi.Handlers, models.HandlerInfo{Trigger: h.Trigger.String(), Line: h.Pos.Line, Calls: callStrings(h.Calls)})
+			bi.Handlers = append(bi.Handlers, models.HandlerInfo{Trigger: h.Trigger.String(), Line: h.Pos.Line, Calls: scenario.StmtLines(h.Body)})
+		}
+		for _, x := range b.Expires {
+			bi.Handlers = append(bi.Handlers, models.HandlerInfo{Kind: "expire", Trigger: x.Var, Line: x.Pos.Line, Calls: scenario.StmtLines(x.Body)})
+		}
+		for _, x := range b.Syncs {
+			bi.Handlers = append(bi.Handlers, models.HandlerInfo{Kind: "sync_receive", Trigger: x.Kind, Line: x.Pos.Line, Calls: scenario.StmtLines(x.Body)})
 		}
 		info.Blocks = append(info.Blocks, bi)
 	}
 	return info
-}
-
-// callStrings renders scenario calls as text.
-func callStrings(calls []command.Call) []string {
-	out := make([]string, len(calls))
-	for i, c := range calls {
-		out[i] = c.String()
-	}
-	return out
 }
 
 // Vars returns the scenario variables by name: the current value of the

@@ -54,7 +54,31 @@ const (
 	pduTypeIPv4v6 = 3   // PDU session type IPv4v6
 	maxPTI        = 254 // largest PTI the UE allocates (0 and 255 are reserved)
 	defaultQFI    = 1   // QoS flow used when the setup request lists none
+	maxQFI        = 63  // largest QoS flow identifier (6 bits, TS 38.413)
 )
 
 // gtpuPort is the GTP-U port (TS 29.281 §4.4.2).
 const gtpuPort = 2152
+
+// 5GS identity types of IdentityRequest and the mobile identity (TS 24.501 9.11.3.3, 9.11.3.4).
+const (
+	identityIMEI    = 3
+	identity5GSTMSI = 4
+	identityIMEISV  = 5
+)
+
+// 5GMM causes of AuthenticationFailure (TS 24.501 9.11.3.2).
+const (
+	causeSynchFailure = 21 // the AUTS goes with it
+)
+
+// amfStar is the AMF field used for MAC-S in the AUTS (all zeros, TS 33.102 6.3.3).
+var amfStar = []byte{0, 0}
+
+// UE security capabilities: the NAS IE starts with the 5G-EA and 5G-IA
+// octets; NGAP has a 16-bit string per algorithm family.
+const (
+	secCapLen = 2    // octets of 5G-EA and 5G-IA
+	nrAlgBits = 16   // bits of NRencryptionAlgorithms / NRintegrityProtectionAlgorithms
+	nrAlgMask = 0xe0 // their first three bits: NEA1-3 / NIA1-3
+)

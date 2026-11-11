@@ -39,6 +39,7 @@ type Backend interface {
 	SignalFile() (models.SignalFile, error)
 	EditSignal(name, hex, mode string, op *models.EditOp) (models.SignalEdit, error)
 	SaveSignal(name, hex, mode string, add bool) (models.SignalFile, error)
+	SignalTypes() models.SignalTypes
 }
 
 var _ Backend = (*engine.Engine)(nil)
@@ -77,6 +78,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/signalfile", s.addSignal)
 	s.mux.HandleFunc("PUT /api/v1/signalfile/{name}", s.updateSignal)
 	s.mux.HandleFunc("POST /api/v1/signaledit", s.editSignal)
+	s.mux.HandleFunc("GET /api/v1/signaltypes", s.signalTypes)
 	s.mux.HandleFunc("GET /api/v1/scenario", s.scenario)
 	s.mux.HandleFunc("GET /api/v1/vars", s.vars)
 	s.mux.HandleFunc("GET /api/v1/commands", s.commandList)

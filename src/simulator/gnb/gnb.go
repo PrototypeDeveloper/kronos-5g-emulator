@@ -76,6 +76,9 @@ func (r *Role) loadSubscriber(cfg *state.Config) error {
 		if r.imeisv, err = security.IMEISV(u.IMEISV); err != nil {
 			return err
 		}
+		if r.imei, err = security.IMEI(u.IMEISV); err != nil {
+			return err
+		}
 	}
 	// UE security capability: one bit per algorithm, NEA0/NIA0 first.
 	for i, on := range []bool{u.Ciphering.NEA0, u.Ciphering.NEA1, u.Ciphering.NEA2, u.Ciphering.NEA3} {
@@ -132,39 +135,103 @@ func (r *Role) Listen() bool { return false }
 
 // PatchNode implements role.Role. NGSetupRequest gets GlobalRANNodeID,
 // RANNodeName and SupportedTAList from config.
-func (r *Role) PatchNode(msg any) error {
-	if m, ok := msg.(*ngapMessage.NGSetupRequest); ok {
-		r.patchNGSetupRequest(m)
+func (r *Role) PatchNode(msg any, c models.NodeBuild) error {
+	off := c.Off
+	switch m := msg.(type) {
+	case *ngapMessage.NGSetupRequest:
+		r.patchGlobalRANNodeID(&m.GlobalRANNodeID, off)
+		r.patchRANNodeName(&m.HasRANNodeName, &m.RANNodeName, off)
+		r.patchTAList(&m.SupportedTAList, off)
+	case *ngapMessage.RANConfigurationUpdate:
+		// The same node information, in the IEs the template has.
+		if m.HasGlobalRANNodeID {
+			r.patchGlobalRANNodeID(&m.GlobalRANNodeID, off)
+		}
+		if m.HasRANNodeName {
+			r.patchRANNodeName(&m.HasRANNodeName, &m.RANNodeName, off)
+		}
+		if m.HasSupportedTAList {
+			r.patchTAList(&m.SupportedTAList, off)
+		}
+	case *ngapMessage.NGReset:
+		// A partial reset names the current UE associations.
+		if m.ResetType.Present == ngapType.ResetTypePresentPartOfNGInterface && off.On(models.MapNGAPID) && len(c.Associations) > 0 {
+			m.ResetType.PartOfNGInterface.List = associationItems(m.ResetType.PartOfNGInterface.List, c.Associations)
+		}
+	case *ngapMessage.NGResetAcknowledge:
+		// The answer names what the AMF's NGReset named (nothing for a whole reset).
+		if off.On(models.MapNGAPID) {
+			m.HasUEAssociatedLogicalNGConnectionList = len(r.lastReset) > 0
+			m.UEAssociatedLogicalNGConnectionList.List = append([]ngapType.UEAssociatedLogicalNGConnectionItem(nil), r.lastReset...)
+		}
 	}
 	return nil
 }
 
-// patchNGSetupRequest writes the node identity, name and TA of the config.
-func (r *Role) patchNGSetupRequest(m *ngapMessage.NGSetupRequest) {
-	id := &m.GlobalRANNodeID
-	id.Present = ngapType.GlobalRANNodeIDPresentGlobalGNBID
-	id.GlobalGNBID.PLMNIdentity = ngapType.PLMNIdentity{Value: clone(r.plmn)}
-	id.GlobalGNBID.GNBID.Present = ngapType.GNBIDPresentGNBID
-	id.GlobalGNBID.GNBID.GNBID = ngapType.BitString{Bytes: clone(r.gnbID.Bytes), BitLength: r.gnbID.BitLength}
-	if r.name != "" {
-		m.HasRANNodeName = true
-		m.RANNodeName.Value = r.name
+// associationItems makes one UE-associated logical NG-connection item per
+// association, the template's first item as the pattern.
+func associationItems(tmpl []ngapType.UEAssociatedLogicalNGConnectionItem, as []models.UEAssociation) []ngapType.UEAssociatedLogicalNGConnectionItem {
+	var pattern ngapType.UEAssociatedLogicalNGConnectionItem
+	if len(tmpl) > 0 {
+		pattern = tmpl[0]
+	}
+	out := make([]ngapType.UEAssociatedLogicalNGConnectionItem, 0, len(as))
+	for _, a := range as {
+		it := pattern
+		it.HasRANUENGAPID, it.RANUENGAPID.Value = true, a.RANUENGAPID
+		it.HasAMFUENGAPID, it.AMFUENGAPID.Value = a.HasAMF, a.AMFUENGAPID
+		out = append(out, it)
+	}
+	return out
+}
+
+// patchRANNodeName writes gnodeb.name (when the config has one).
+func (r *Role) patchRANNodeName(has *bool, name *ngapType.RANNodeName, off models.MapOff) {
+	if r.name != "" && off.On(models.MapRANName) {
+		*has, name.Value = true, r.name
+	}
+}
+
+// patchGlobalRANNodeID writes the PLMN and gNB ID of the config.
+func (r *Role) patchGlobalRANNodeID(id *ngapType.GlobalRANNodeID, off models.MapOff) {
+	if off.On(models.MapPLMN) || off.On(models.MapGNodeBID) {
+		id.Present = ngapType.GlobalRANNodeIDPresentGlobalGNBID
+	}
+	if off.On(models.MapPLMN) {
+		id.GlobalGNBID.PLMNIdentity = ngapType.PLMNIdentity{Value: clone(r.plmn)}
+	}
+	if off.On(models.MapGNodeBID) {
+		id.GlobalGNBID.GNBID.Present = ngapType.GNBIDPresentGNBID
+		id.GlobalGNBID.GNBID.GNBID = ngapType.BitString{Bytes: clone(r.gnbID.Bytes), BitLength: r.gnbID.BitLength}
+	}
+}
+
+// patchTAList writes the TA of the config: TAC, broadcast PLMN and slices.
+func (r *Role) patchTAList(list *ngapType.SupportedTAList, off models.MapOff) {
+	if !off.On(models.MapTAC) && !off.On(models.MapPLMN) && !off.On(models.MapSNSSAI) {
+		return // the TA list as the template has it
 	}
 	// config describes one TA: keep the template's first entries (and their
 	// extensions) as the pattern and replace the values.
 	var ta ngapType.SupportedTAItem
-	if len(m.SupportedTAList.List) > 0 {
-		ta = m.SupportedTAList.List[0]
+	if len(list.List) > 0 {
+		ta = list.List[0]
 	}
-	ta.TAC = ngapType.TAC{Value: clone(r.tac)}
+	if off.On(models.MapTAC) {
+		ta.TAC = ngapType.TAC{Value: clone(r.tac)}
+	}
 	var bp ngapType.BroadcastPLMNItem
 	if len(ta.BroadcastPLMNList.List) > 0 {
 		bp = ta.BroadcastPLMNList.List[0]
 	}
-	bp.PLMNIdentity = ngapType.PLMNIdentity{Value: clone(r.plmn)}
-	bp.TAISliceSupportList = ngapType.SliceSupportList{List: append([]ngapType.SliceSupportItem(nil), r.slices...)}
+	if off.On(models.MapPLMN) {
+		bp.PLMNIdentity = ngapType.PLMNIdentity{Value: clone(r.plmn)}
+	}
+	if off.On(models.MapSNSSAI) {
+		bp.TAISliceSupportList = ngapType.SliceSupportList{List: append([]ngapType.SliceSupportItem(nil), r.slices...)}
+	}
 	ta.BroadcastPLMNList.List = []ngapType.BroadcastPLMNItem{bp}
-	m.SupportedTAList.List = []ngapType.SupportedTAItem{ta}
+	list.List = []ngapType.SupportedTAItem{ta}
 }
 
 // NodeReceived implements role.Role: record what NG Setup returned.
@@ -186,6 +253,14 @@ func (r *Role) NodeReceived(msg any, st *models.NodeStatus) string {
 			st.PeerInfo = append(st.PeerInfo, fmt.Sprintf("PLMN %s (slices %s)", plmn.String(p.PLMNIdentity.Value), strings.Join(slices, ", ")))
 		}
 		return fmt.Sprintf("NG Setup succeeded: AMF %s, %s", st.PeerName, strings.Join(st.PeerInfo, ", "))
+	case *ngapMessage.NGReset:
+		// NGResetAcknowledge names the same UE associations.
+		r.lastReset = nil
+		if m.ResetType.Present == ngapType.ResetTypePresentPartOfNGInterface {
+			r.lastReset = append(r.lastReset, m.ResetType.PartOfNGInterface.List...)
+			return fmt.Sprintf("NG Reset of %d UE association(s): %s", len(r.lastReset), CauseString(m.Cause))
+		}
+		return "NG Reset of the whole interface: " + CauseString(m.Cause)
 	case *ngapMessage.NGSetupFailure:
 		st.Setup = models.SetupFailed
 		st.Cause = CauseString(m.Cause)

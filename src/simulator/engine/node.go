@@ -8,6 +8,7 @@ import (
 	"time"
 
 	libngap "libngap"
+	"libngap/ngapMessage"
 
 	"kronos/command"
 	"kronos/models"
@@ -53,7 +54,7 @@ func (n *node) loop() {
 	n.e.publish(models.Event{Kind: models.KindLink, Source: models.SourceNode,
 		Text: fmt.Sprintf("SCTP connected: %s → %s (streams out %d / in %d)", st.Local, st.Remote, st.OutStreams, st.InStreams)})
 	if b := n.e.scen.Node; b != nil && b.Entry != nil {
-		n.run("node/entry", b.Entry.Calls)
+		n.run("node/entry", b.Entry.Body)
 	}
 	for m := range n.inbox {
 		switch m := m.(type) {
@@ -61,7 +62,12 @@ func (n *node) loop() {
 			n.receive(m)
 		case execMsg:
 			m.reply <- execResult{imsi: models.SourceNode, err: command.Exec(n, m.call)}
+		case timerMsg:
+			n.timerExpired(m)
+		case syncMsg:
+			n.syncReceived(m.m)
 		case lostMsg:
+			n.timers.stopAll()
 			// The association ended: report it and let the engine clean up.
 			n.update(func(st *models.NodeStatus) { st.Connected = false })
 			text := fmt.Sprintf("SCTP disconnected: %v", m.err)
@@ -149,8 +155,11 @@ func (n *node) receive(m rxMsg) {
 	if note != "" {
 		n.e.publish(models.Event{Kind: models.KindLink, Source: models.SourceNode, NGAP: info.Name, Text: note})
 	}
+	if r, ok := msg.(*ngapMessage.NGReset); ok {
+		n.e.resetAssociations(r.ResetType, "NG Reset from the AMF")
+	}
 	if h != nil {
-		n.run("node/receive("+h.Trigger.String()+")", h.Calls)
+		n.run("node/receive("+h.Trigger.String()+")", h.Body)
 	}
 	// Start the subscribers once NG Setup has succeeded.
 	if setupOK && !n.subsStarted {
@@ -161,12 +170,10 @@ func (n *node) receive(m rxMsg) {
 
 // run executes scenario calls in order. A failing call is reported and the
 // rest still run.
-func (n *node) run(where string, calls []command.Call) {
-	for _, c := range calls {
-		if err := command.Exec(n, c); err != nil {
-			n.e.publish(models.Event{Kind: models.KindError, Source: models.SourceNode, Handler: where, Text: fmt.Sprintf("%s: %v", c, err)})
-		}
-	}
+func (n *node) run(where string, body []scenario.Stmt) {
+	scenario.Run(n, body, func(what string, err error) {
+		n.e.publish(models.Event{Kind: models.KindError, Source: models.SourceNode, Handler: where, Text: fmt.Sprintf("%s: %v", what, err)})
+	})
 }
 
 // update changes the status under its lock.
@@ -204,6 +211,12 @@ func (n *node) Send(name string) error {
 	if err := n.conn.Send(b, 0, models.PPIDNGAP); err != nil {
 		return fmt.Errorf("cannot send %s: %v", name, err)
 	}
+	// An NG Reset this gNB sends releases the UE associations it names.
+	if sig.NGAP != nil && sig.NGAP.Name == "NGReset" {
+		if msg, _ := libngap.Decode(b); msg != nil {
+			n.e.resetAssociations(msg.(*ngapMessage.NGReset).ResetType, "NG Reset sent")
+		}
+	}
 	ev := models.Event{Kind: models.KindMessage, Source: models.SourceNode, Dir: "tx", Signal: name, Len: len(b), Hex: hexOf(b)}
 	if sig.NGAP != nil {
 		ev.NGAP = sig.NGAP.Name
@@ -228,8 +241,10 @@ func (n *node) Var(name string) (command.Value, error) {
 	return command.Value{}, fmt.Errorf("there is no public variable %s", name)
 }
 
-// SetVar implements command.Env.
-func (n *node) SetVar(name string, v command.Value) error { return n.e.vars.set(name, v) }
+// Assign implements command.Env; the node has public variables only.
+func (n *node) Assign(name string, eval func() (command.Value, error)) error {
+	return n.e.vars.assign(name, eval)
+}
 
 // Builtin implements command.Env.
 func (n *node) Builtin(name string) (command.Value, error) {
@@ -237,7 +252,7 @@ func (n *node) Builtin(name string) (command.Value, error) {
 	case "msg":
 		return command.StrVal(n.lastMsg), nil
 	case "time":
-		return command.StrVal(time.Now().Format("15:04:05.000")), nil
+		return command.StrVal(time.Now().Format(timeLayout)), nil
 	}
 	return command.Value{}, fmt.Errorf("$%s cannot be used on the node", name)
 }

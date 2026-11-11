@@ -18,6 +18,7 @@ import (
 	"kronos/simulator/gnb"
 	"kronos/state"
 	"kronos/traffic/tun"
+	"kronos/transport/peer"
 	"kronos/webconsole"
 )
 
@@ -92,6 +93,25 @@ func start(ctx context.Context, o options, stdin io.Reader, stdout, stderr io.Wr
 		con.line("web console: " + url)
 		logger.Info("web console: %s", url)
 	}
+	// The other pseudo-calls' messages (sync_receive) come to gnodeb.http.src.
+	var syncListener net.Listener
+	if src := cfg.SyncListen(); src != nil {
+		addr := net.JoinHostPort(src.Address, strconv.Itoa(src.Port))
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			con.line(fmt.Sprintf("cannot listen for the other pseudo-calls on %s (gnodeb.http): %v", addr, err))
+			if webListener != nil {
+				webListener.Close()
+			}
+			unsubscribe()
+			<-printed
+			stopTrace()
+			return 1
+		}
+		syncListener = l
+		con.line("pseudo-call link: http://" + l.Addr().String() + peer.SyncPath)
+		logger.Info("pseudo-call link: http://%s%s", l.Addr(), peer.SyncPath)
+	}
 	snap := "off"
 	if cfg.Base.Snap {
 		snap = "on"
@@ -116,6 +136,18 @@ func start(ctx context.Context, o options, stdin io.Reader, stdout, stderr io.Wr
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	eng.Start(ctx)
+	syncDone := make(chan struct{})
+	if syncListener != nil {
+		srv := peer.NewServer(eng.DeliverSync)
+		go func() {
+			defer close(syncDone)
+			if err := srv.Serve(ctx, syncListener); err != nil {
+				logger.Error("pseudo-call link: %v", err)
+			}
+		}()
+	} else {
+		close(syncDone)
+	}
 	webDone := make(chan struct{})
 	if webListener != nil {
 		web := webconsole.New(eng, models.WebOptions{Version: o.version})
@@ -163,6 +195,7 @@ func start(ctx context.Context, o options, stdin io.Reader, stdout, stderr io.Wr
 	}
 	cancel()
 	<-webDone // the console stops with ctx
+	<-syncDone
 	eng.Wait()
 	// The engine has stopped, so every event is already queued.
 	unsubscribe()

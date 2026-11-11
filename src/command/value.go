@@ -20,6 +20,8 @@ func (t Type) String() string {
 		return "string"
 	case TypeDuration:
 		return "duration"
+	case TypeBool:
+		return "bool"
 	default:
 		return "none"
 	}
@@ -30,6 +32,9 @@ func IntVal(v int64) Value         { return Value{Type: TypeInt, Int: v} }
 func FloatVal(v float64) Value     { return Value{Type: TypeFloat, Float: v} }
 func StrVal(v string) Value        { return Value{Type: TypeString, Str: v} }
 func DurVal(v time.Duration) Value { return Value{Type: TypeDuration, Dur: v} }
+
+// BoolVal makes the Value of a comparison.
+func BoolVal(v bool) Value { return Value{Type: TypeBool, Bool: v} }
 
 // String returns the value as snap prints it with %v.
 func (v Value) String() string {
@@ -42,6 +47,8 @@ func (v Value) String() string {
 		return v.Str
 	case TypeDuration:
 		return v.Dur.String()
+	case TypeBool:
+		return strconv.FormatBool(v.Bool)
 	default:
 		return ""
 	}
@@ -66,6 +73,8 @@ func (v Value) Interface() any {
 		return v.Str
 	case TypeDuration:
 		return v.Dur
+	case TypeBool:
+		return v.Bool
 	default:
 		return nil
 	}

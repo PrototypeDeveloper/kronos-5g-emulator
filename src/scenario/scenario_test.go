@@ -213,7 +213,7 @@ func TestSampleScenario(t *testing.T) {
 		t.Fatalf("the sample scenario has errors:\n%s", joinDiags(ds))
 	}
 	// The PDU session is its own state, started by its entry block.
-	if b, ok := f.State("sessionestablishment"); !ok || b.Entry == nil || b.Entry.Calls[0].Args[0].Name != "UplinkNASTransportPDUSessionEstablishmentRequest" {
+	if b, ok := f.State("sessionestablishment"); !ok || b.Entry == nil || b.Entry.Body[0].Call.Args[0].Name != "UplinkNASTransportPDUSessionEstablishmentRequest" {
 		t.Fatal("sessionestablishment state with its entry is missing")
 	}
 	h := f.States[0].Handlers[0]
@@ -289,13 +289,13 @@ func TestValidScenarioWithEntry(t *testing.T) {
 	if ds.HasErrors() || ds.Count(diag.Warning) > 0 {
 		t.Fatalf("unexpected diagnostics:\n%s", joinDiags(ds))
 	}
-	if f.Node.Entry == nil || len(f.Node.Entry.Calls) != 1 || f.States[0].Entry.Calls[0].Args[0].Name != "InitialUEMeesageRegistrationRequest" {
+	if f.Node.Entry == nil || len(f.Node.Entry.Body) != 1 || f.States[0].Entry.Body[0].Call.Args[0].Name != "InitialUEMeesageRegistrationRequest" {
 		t.Fatal("entry blocks not parsed")
 	}
 	if n := f.StripCalls("snap"); n != 2 {
 		t.Fatalf("stripped %d snap calls", n)
 	}
-	if len(f.Node.Handlers[0].Calls) != 0 || len(f.Node.Handlers) != 2 {
+	if len(f.Node.Handlers[0].Body) != 0 || len(f.Node.Handlers) != 2 {
 		t.Fatal("handler should stay after its snap is stripped")
 	}
 }
@@ -316,7 +316,7 @@ func TestScenarioErrors(t *testing.T) {
 		"start { receive(Paging) { target(208930000000001).send(InitialUEMeesageServiceRequest) } }": "target() cannot be used in a scenario",
 		"start { receive(Paging) { snap(\"%d %d\", 1) } }":                                           "2 conversion(s) in the format but 1 value(s)",
 		"node { receive(NGSetupResponse) { move(start) } } start {}":                                 "cannot be used in the node block",
-		"start { timeout(5s) { } }":                                                                  "timeout is not supported",
+		"start { timeout(5s) { } }":                                                                  "timeout is not supported: start a timer with timer(t)",
 		"start { receive(*) { } }":                                                                   "receive(*) is not supported",
 		"start { send(NGSetupRequest) }":                                                             "cannot be written directly in a block",
 		"idle { }":                                                                                   "there is no initial state start",

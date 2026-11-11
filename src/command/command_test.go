@@ -18,7 +18,7 @@ func TestLexer(t *testing.T) {
 		got = append(got, tok.Kind.String()+":"+tok.Text)
 	}
 	want := []string{"name:send", "(:(", "name:X", "):)", "name:snap", "(:(", "string:a%d\n", ",:,", "builtin:ue", ",:,",
-		"float:1.5", ",:,", "duration:5s", ",:,", "integer:-3", ",:,", "integer:208930000000001", ",:,", "name:5GMMStatus", "):)"}
+		"float:1.5", ",:,", "duration:5s", ",:,", "-:-", "integer:3", ",:,", "integer:208930000000001", ",:,", "name:5GMMStatus", "):)"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("tokens\n got %q\nwant %q", got, want)
 	}
@@ -63,7 +63,7 @@ func TestParseLine(t *testing.T) {
 		"target(1)":                          "followed by . and a command",
 		"send(X).move(Y)":                    "only one command per line",
 		"send(X) extra":                      "unexpected text",
-		"send(":                              "an argument is needed",
+		"send(":                              "a value is needed",
 		`snap("x)`:                           "unterminated string",
 		"target(x).send(X)":                  "takes an IMSI",
 		"target(1).target(2)":                "goes before a command",
@@ -96,6 +96,10 @@ func (fakeResolver) Var(name string) (VarInfo, bool) {
 		return VarInfo{Type: TypeInt, Public: true}, true
 	case "s":
 		return VarInfo{Type: TypeString}, true
+	case "t":
+		return VarInfo{Type: TypeDuration}, true
+	case "n":
+		return VarInfo{Type: TypeDuration, Public: true}, true
 	}
 	return VarInfo{}, false
 }
@@ -107,7 +111,7 @@ func (fakeResolver) Names(k Kind) []string {
 	case KindState:
 		return []string{"start", "registered"}
 	}
-	return []string{"a", "s"}
+	return []string{"a", "n", "s", "t"}
 }
 
 func checkLine(t *testing.T, line string) (Scope, diag.List) {
@@ -143,6 +147,11 @@ func TestCheckLine(t *testing.T) {
 		"iperftcp(10.10.10.20)": ScopeUE,
 		"iperftcp(10.10.10.20, 13531, 0, 5s, dl)":       ScopeUE,
 		"iperftcp(10.10.10.20, 13531, 1G, 5s, ul, 100)": ScopeUE,
+		"timer(t)":                         ScopeUE,
+		"target(208930000000001).timer(t)": ScopeUE,
+		"stoptimer(t)":                     ScopeUE,
+		"timer(n)":                         ScopeNode,
+		"stoptimer(n)":                     ScopeNode,
 	} {
 		scope, ds := checkLine(t, line)
 		if ds.HasErrors() || scope != want {
@@ -150,35 +159,38 @@ func TestCheckLine(t *testing.T) {
 		}
 	}
 	for line, want := range map[string]string{
-		"target(208930000000001).send(NGSetupRequest)":                      "is a node signal, so it cannot take target",
-		"target(208930000000001).help()":                                    "cannot take target",
+		"target(208930000000001).send(NGSetupRequest)": "is a node signal, so it cannot take target",
+		"target(208930000000001).help()":               "cannot take target",
+		"target(208930000000001).timer(n)":             "n is public, a timer of the node, so it cannot take target",
+		"timer(a)":                                     "timer: a is not a duration variable",
+		"timer(x)":                                     "variable x is not declared",
 		"target(208930000000099).send(InitialUEMessageRegistrationRequest)": "no subscriber with IMSI",
 		"target(12345).send(InitialUEMessageRegistrationRequest)":           "15-digit",
-		"send(NGSetupReqest)":                                               "did you mean NGSetupRequest?",
-		"move(regstered)":                                                   "did you mean registered?",
-		"sned(X)":                                                           "did you mean send?",
-		`snap("%d", a, s)`:                                                  "1 conversion(s) in the format but 2 value(s)",
-		`snap("%d %[1]d", a)`:                                               "[n] are not supported",
-		"snap(a)":                                                           "must be a string",
-		`snap("%v", undefined)`:                                             "variable undefined",
-		`snap("%v", $nope)`:                                                 "unknown builtin",
-		"send(NGSetupRequest, X)":                                           "wrong number of arguments",
-		"help(nope)":                                                        "unknown command nope",
-		"ping(10.10.10.20, -1)":                                             "from 0 to 1000000",
-		"ping(10.10.10.20, 1, 0s)":                                          "interval",
-		"ping(10.10.10.20, 1, 1s, 70000)":                                   "size",
-		"ping(nowhere)":                                                     "variable nowhere",
-		`ping("x")`:                                                         "IPv4",
-		"iperf(10.10.10.20, 0)":                                             "port",
-		"iperf(10.10.10.20, 5201, 100m)":                                    "100 minutes",
-		"iperf(10.10.10.20, 5201, fast)":                                    "cannot read the rate",
-		"iperf(10.10.10.20, 5201, 1M, 1500ms)":                              "whole seconds",
-		"iperf(10.10.10.20, 5201, 1M, 1s, up)":                              "one of ul, dl",
-		"iperf(10.10.10.20, 5201, 1M, 1s, ul, 8)":                           "len",
-		"stop(all)":                                                         "one of ping, iperf",
-		"iperf(10.10.10.20, 5201, 0)":                                       "must be positive",
-		"iperftcp(10.10.10.20, 5201, 0, 1s, ul, 0)":                         "iperftcp len",
-		"iperftcp(10.10.10.20, 5201, 0, 1s, ul, 2000000)":                   "iperftcp len",
+		"send(NGSetupReqest)":                             "did you mean NGSetupRequest?",
+		"move(regstered)":                                 "did you mean registered?",
+		"sned(X)":                                         "did you mean send?",
+		`snap("%d", a, s)`:                                "1 conversion(s) in the format but 2 value(s)",
+		`snap("%d %[1]d", a)`:                             "[n] are not supported",
+		"snap(a)":                                         "must be a string",
+		`snap("%v", undefined)`:                           "variable undefined",
+		`snap("%v", $nope)`:                               "unknown builtin",
+		"send(NGSetupRequest, X)":                         "wrong number of arguments",
+		"help(nope)":                                      "unknown command nope",
+		"ping(10.10.10.20, -1)":                           "from 0 to 1000000",
+		"ping(10.10.10.20, 1, 0s)":                        "interval",
+		"ping(10.10.10.20, 1, 1s, 70000)":                 "size",
+		"ping(nowhere)":                                   "variable nowhere",
+		`ping("x")`:                                       "IPv4",
+		"iperf(10.10.10.20, 0)":                           "port",
+		"iperf(10.10.10.20, 5201, 100m)":                  "100 minutes",
+		"iperf(10.10.10.20, 5201, fast)":                  "cannot read the rate",
+		"iperf(10.10.10.20, 5201, 1M, 1500ms)":            "whole seconds",
+		"iperf(10.10.10.20, 5201, 1M, 1s, up)":            "one of ul, dl",
+		"iperf(10.10.10.20, 5201, 1M, 1s, ul, 8)":         "len",
+		"stop(all)":                                       "one of ping, iperf",
+		"iperf(10.10.10.20, 5201, 0)":                     "must be positive",
+		"iperftcp(10.10.10.20, 5201, 0, 1s, ul, 0)":       "iperftcp len",
+		"iperftcp(10.10.10.20, 5201, 0, 1s, ul, 2000000)": "iperftcp len",
 	} {
 		_, ds := checkLine(t, line)
 		if !ds.HasErrors() || !strings.Contains(ds[0].Msg, want) {
@@ -230,6 +242,8 @@ type fakeEnv struct {
 	scope  Scope
 	log    []string
 	failOn string
+	vars   map[string]Value // values set by set (a is 7 and s "test" before)
+	mapOff models.MapOff
 }
 
 func (e *fakeEnv) Scope() Scope { return e.scope }
@@ -243,15 +257,54 @@ func (e *fakeEnv) Send(s string) error {
 func (e *fakeEnv) Move(s string) error { e.log = append(e.log, "move "+s); return nil }
 func (e *fakeEnv) Print(s string)      { e.log = append(e.log, "print "+s) }
 func (e *fakeEnv) Var(n string) (Value, error) {
+	if v, ok := e.vars[n]; ok {
+		return v, nil
+	}
 	if n == "a" {
 		return IntVal(7), nil
 	}
 	return StrVal("test"), nil
 }
-func (e *fakeEnv) SetVar(string, Value) error { return nil }
-func (e *fakeEnv) LinkUp() error              { e.log = append(e.log, "linkup"); return nil }
-func (e *fakeEnv) LinkDown() error            { e.log = append(e.log, "linkdown"); return nil }
-func (e *fakeEnv) Reload() error              { e.log = append(e.log, "reload"); return nil }
+func (e *fakeEnv) Assign(n string, eval func() (Value, error)) error {
+	v, err := eval()
+	if err != nil {
+		return err
+	}
+	if e.vars == nil {
+		e.vars = map[string]Value{}
+	}
+	e.vars[n] = v
+	e.log = append(e.log, "set "+n+" = "+v.Literal())
+	return nil
+}
+func (e *fakeEnv) LinkUp() error   { e.log = append(e.log, "linkup"); return nil }
+func (e *fakeEnv) LinkDown() error { e.log = append(e.log, "linkdown"); return nil }
+func (e *fakeEnv) Reload() error   { e.log = append(e.log, "reload"); return nil }
+func (e *fakeEnv) SetMapping(items models.MapOff, on bool) error {
+	if on {
+		e.mapOff &^= items
+	} else {
+		e.mapOff |= items
+	}
+	return nil
+}
+func (e *fakeEnv) Mapping(it models.MapItem) (int, int) {
+	if e.mapOff.On(it) {
+		return 0, 1
+	}
+	return 1, 1
+}
+func (e *fakeEnv) Info(s string) { e.log = append(e.log, "info "+s) }
+func (e *fakeEnv) SyncSend(kind, dst string) error {
+	e.log = append(e.log, "sync_send "+kind+" "+dst)
+	return nil
+}
+func (e *fakeEnv) Control(key string, d time.Duration) error {
+	e.log = append(e.log, "control "+key+" "+d.String())
+	return nil
+}
+func (e *fakeEnv) Timer(n string) error     { e.log = append(e.log, "timer "+n); return nil }
+func (e *fakeEnv) StopTimer(n string) error { e.log = append(e.log, "stoptimer "+n); return nil }
 func (e *fakeEnv) Ping(a models.PingArgs) error {
 	e.log = append(e.log, fmt.Sprintf("ping %s %d %s %d", a.Dst, a.Count, a.Interval, a.Size))
 	return nil
@@ -315,7 +368,7 @@ func TestExec(t *testing.T) {
 }
 
 func TestRegistry(t *testing.T) {
-	if got := strings.Join(Names(), ","); got != "help,iperf,iperftcp,linkdown,linkup,move,ping,reload,send,snap,stop,wait" {
+	if got := strings.Join(Names(), ","); got != "control,help,iperf,iperftcp,linkdown,linkup,mapget,mapoff,mapon,move,ping,reload,send,set,snap,stop,stoptimer,sync_send,timer,wait" {
 		t.Fatalf("commands: %s", got)
 	}
 	s, _ := Lookup("snap")

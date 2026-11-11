@@ -32,6 +32,19 @@ var tokenNames = [...]string{
 	TokColon:    ":",
 	TokAssign:   "=",
 	TokStar:     "*",
+	TokPlus:     "+",
+	TokMinus:    "-",
+	TokSlash:    "/",
+	TokPercent:  "%",
+	TokEq:       "==",
+	TokNe:       "!=",
+	TokLt:       "<",
+	TokLe:       "<=",
+	TokGt:       ">",
+	TokGe:       ">=",
+	TokAnd:      "&&",
+	TokOr:       "||",
+	TokNot:      "!",
 	TokIllegal:  "invalid token",
 }
 
@@ -137,6 +150,13 @@ func (l *Lexer) skipSpaceAndComments() {
 var punct = map[rune]TokenKind{
 	'(': TokLParen, ')': TokRParen, '{': TokLBrace, '}': TokRBrace,
 	',': TokComma, '.': TokDot, ':': TokColon, '=': TokAssign, '*': TokStar,
+	'+': TokPlus, '-': TokMinus, '/': TokSlash, '%': TokPercent,
+	'<': TokLt, '>': TokGt, '!': TokNot,
+}
+
+// punct2 maps the two-character operators to their kinds.
+var punct2 = map[string]TokenKind{
+	"==": TokEq, "!=": TokNe, "<=": TokLe, ">=": TokGe, "&&": TokAnd, "||": TokOr,
 }
 
 // isIdentStart reports whether r can start a name (an ASCII letter or _).
@@ -174,39 +194,50 @@ func (l *Lexer) scan() Token {
 			return Token{Kind: TokIllegal, Text: "$ must be followed by the name of a builtin", Pos: p}
 		}
 		return Token{Kind: TokBuiltin, Text: l.src[start:l.off], Pos: p}
-	case isDigit(r) || (r == '-' && l.off+1 < len(l.src) && isDigit(rune(l.src[l.off+1]))):
+	case isDigit(r):
 		return l.scanNumber(p)
 	case r == '"':
 		return l.scanString(p)
+	}
+	// Operators; a minus sign is a token of its own (-3 is minus and 3).
+	if l.off+opPairLen <= len(l.src) {
+		if k, ok := punct2[l.src[l.off:l.off+opPairLen]]; ok {
+			text := l.src[l.off : l.off+opPairLen]
+			l.advance()
+			l.advance()
+			return Token{Kind: k, Text: text, Pos: p}
+		}
 	}
 	l.advance()
 	if k, ok := punct[r]; ok {
 		return Token{Kind: k, Text: string(r), Pos: p}
 	}
+	switch r {
+	case '&':
+		return Token{Kind: TokIllegal, Text: "invalid character '&' (and is written &&)", Pos: p}
+	case '|':
+		return Token{Kind: TokIllegal, Text: "invalid character '|' (or is written ||)", Pos: p}
+	}
 	return Token{Kind: TokIllegal, Text: fmt.Sprintf("invalid character %q", r), Pos: p}
 }
 
-// scanNumber reads a word that starts with a digit (or "-digit") and decides
-// whether it is an int, a float, a duration or a name such as a signal label.
+// scanNumber reads a word that starts with a digit and decides whether it
+// is an int, a float, a duration or a name such as a signal label.
 func (l *Lexer) scanNumber(p diag.Pos) Token {
 	start := l.off
-	if l.peekRune() == '-' {
-		l.advance()
-	}
 	for r := l.peekRune(); isIdentPart(r) || r == '.' || r == 'µ'; r = l.peekRune() {
 		l.advance()
 	}
 	word := l.src[start:l.off]
-	digits := strings.TrimPrefix(word, "-")
 	switch {
-	case allDigits(digits):
+	case allDigits(word):
 		v, err := strconv.ParseInt(word, 10, 64)
 		if err != nil {
 			// Too large for an int but still a valid IMSI-like digit string.
 			return Token{Kind: TokInt, Text: word, Pos: p}
 		}
 		return Token{Kind: TokInt, Text: word, Val: IntVal(v), Pos: p}
-	case isFloat(digits):
+	case isFloat(word):
 		v, err := strconv.ParseFloat(word, 64)
 		if err != nil {
 			return Token{Kind: TokIllegal, Text: fmt.Sprintf("cannot read the number %s", word), Pos: p}
@@ -217,10 +248,18 @@ func (l *Lexer) scanNumber(p diag.Pos) Token {
 		return Token{Kind: TokDuration, Text: word, Val: DurVal(d), Pos: p}
 	}
 	if a, err := netip.ParseAddr(word); err == nil && a.Is4() {
-		// ping(10.10.10.20): an IPv4 address needs no quotes
+		// ping(10.10.10.20): an IPv4 address needs no quotes, nor does
+		// address:port (sync_send(SYNC, 127.0.0.1:12345)).
+		if l.peekRune() == ':' && l.off+1 < len(l.src) && isDigit(rune(l.src[l.off+1])) {
+			l.advance()
+			for isDigit(l.peekRune()) {
+				l.advance()
+			}
+			word = l.src[start:l.off]
+		}
 		return Token{Kind: TokString, Text: word, Val: StrVal(word), Pos: p}
 	}
-	if word[0] != '-' && !strings.ContainsAny(word, ".µ") {
+	if !strings.ContainsAny(word, ".µ") {
 		// A name that starts with a digit, e.g. a signal label.
 		return Token{Kind: TokIdent, Text: word, Pos: p}
 	}

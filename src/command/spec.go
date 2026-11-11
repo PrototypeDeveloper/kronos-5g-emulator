@@ -35,6 +35,15 @@ func (s Scope) String() string {
 	if s&ScopeBySignal != 0 {
 		parts = append(parts, "decided by the signal")
 	}
+	if s&ScopeByVar != 0 {
+		parts = append(parts, "decided by the variable (public: node, private: subscriber)")
+	}
+	if s&ScopeByTarget != 0 {
+		return "the block in a scenario; on the CUI/GUI the subscriber of target(), or without it the node and every subscriber"
+	}
+	if s&ScopeByAssign != 0 {
+		parts = append(parts, "the block in a scenario; on the CUI/GUI decided by the variable (public: once, private: subscriber)")
+	}
 	return strings.Join(parts, "/")
 }
 
@@ -89,7 +98,7 @@ var registry = map[string]Spec{}
 // is a programming error caught by the first test run.
 func Register(s Spec) {
 	switch {
-	case s.Name == "" || s.Run == nil || s.Scope == 0 || s.Where == 0:
+	case s.Name == "" || s.Run == nil && s.RunCall == nil || s.Scope == 0 || s.Where == 0:
 		panic(fmt.Sprintf("command: incomplete spec %q", s.Name))
 	case s.Name == TargetKeyword:
 		panic("command: \"target\" is reserved for selecting subscribers")

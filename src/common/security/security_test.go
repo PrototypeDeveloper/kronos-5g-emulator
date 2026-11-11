@@ -77,6 +77,17 @@ func TestNullSUCI(t *testing.T) {
 	}
 }
 
+func TestIMEI(t *testing.T) {
+	// 490154203237518 (a known valid IMEI): the check digit 8 follows the first 14 digits.
+	b, err := IMEI("4901542032375199")
+	if err != nil || !bytes.Equal(b, h("4b09512430325781")) {
+		t.Fatalf("%x %v", b, err)
+	}
+	if _, err := IMEI("12"); err == nil {
+		t.Fatal("a short IMEISV")
+	}
+}
+
 func TestIMEISV(t *testing.T) {
 	// The sample SecurityModeComplete carries IMEISV 4370816125816151.
 	b, err := IMEISV("4370816125816151")

@@ -51,8 +51,11 @@ func EditSignal(b []byte, mode Mode, op *models.EditOp, auto AutoRule) ([]byte, 
 
 // applyEdit decodes the signal, applies op at its path and encodes it again.
 func applyEdit(b []byte, op models.EditOp) ([]byte, error) {
-	if op.Path == "" && op.Kind == "hex" { // the whole signal
+	switch {
+	case op.Path == "" && op.Kind == "hex": // the whole signal
 		return parseHex(op.Value)
+	case op.Path == "" && op.Kind == "new": // a new signal of an NGAP message type
+		return NewSignal(op.Value)
 	}
 	msg, err := libngap.Decode(b)
 	if msg == nil {
@@ -171,8 +174,10 @@ func choiceOf(typ reflect.Type) ([]string, int) {
 	}
 	var alts []string
 	for i := f.Index[0] + 1; i < typ.NumField(); i++ {
-		if n := typ.Field(i).Name; !extensionFields[n] {
-			alts = append(alts, n)
+		sf := typ.Field(i)
+		// The extension alternative counts when it holds IEs libngap knows.
+		if sf.Name == "ChoiceExtensions" && len(entryAlternatives(sf.Type)) > 0 || !extensionFields[sf.Name] {
+			alts = append(alts, sf.Name)
 		}
 	}
 	return alts, f.Index[0]
@@ -319,7 +324,7 @@ func applyAt(l loc, op models.EditOp) error {
 		}
 		has := v.FieldByName("Has" + op.Value)
 		f, ok := v.Type().FieldByName(op.Value)
-		if !ok || !has.IsValid() || has.Kind() != reflect.Bool || extensionFields[op.Value] {
+		if !ok || !has.IsValid() || has.Kind() != reflect.Bool || extensionFields[op.Value] && !(op.Value == "IEExtensions" && editableEntries(f.Type)) {
 			return fmt.Errorf("%s is not an optional field here", op.Value)
 		}
 		if has.Bool() {
@@ -357,6 +362,17 @@ func applyAt(l loc, op models.EditOp) error {
 		has.SetBool(false)
 		v.Set(reflect.Zero(v.Type()))
 		return nil
+	case "nas":
+		// A new NAS message in the octets of a NAS-PDU or a NAS container.
+		if k := containerKind(l); k != "nas-pdu" && k != "nas" {
+			return errors.New("only a NAS-PDU or a NAS container holds a NAS message")
+		}
+		b, err := NewNAS(op.Value)
+		if err != nil {
+			return err
+		}
+		v.SetBytes(b)
+		return nil
 	case "choose":
 		alts, at := choiceOf(v.Type())
 		if alts == nil {
@@ -377,6 +393,9 @@ func applyAt(l loc, op models.EditOp) error {
 				return err
 			}
 			setInt(v.Field(at), int64(i+1))
+			if isIEEntry(v.Type()) {
+				setEntryIDs(v, a) // the IE ID and criticality of the IE chosen
+			}
 			return nil
 		}
 		return fmt.Errorf("%s is not an alternative (%s)", op.Value, strings.Join(alts, ", "))
@@ -407,6 +426,9 @@ func fill(v reflect.Value, f reflect.StructField) error {
 		if alts, at := choiceOf(v.Type()); alts != nil {
 			setInt(v.Field(at), 1)
 			af, _ := v.Type().FieldByName(alts[0])
+			if isIEEntry(v.Type()) {
+				setEntryIDs(v, alts[0]) // an IE container entry: its IE ID and criticality
+			}
 			return fill(v.FieldByIndex(af.Index), af)
 		}
 		// Otherwise fill the mandatory fields; optional ones stay absent.
@@ -427,18 +449,46 @@ func fill(v reflect.Value, f reflect.StructField) error {
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			// Octets that hold a Transfer get an encoded minimal Transfer.
 			if typ, ok := transferTypes[f.Name]; ok {
+				// One that cannot be made empty (an IE container) stays without octets.
 				p := reflect.New(typ)
 				if err := fill(p.Elem(), reflect.StructField{}); err != nil {
 					return err
 				}
 				b, err := ngapcodec.EncodeParameter(typ.Name(), p.Elem().Interface())
 				if err != nil {
-					return fmt.Errorf("cannot make an empty %s: %v", typ.Name(), err)
+					b = nil
 				}
 				v.SetBytes(b)
 				return nil
 			}
 			v.SetBytes(make([]byte, lb(tag.sizeLB)))
+			return nil
+		}
+		// An IE container gets its mandatory IEs (an extension container
+		// one IE: it may not be empty).
+		if alts := entryAlternatives(v.Type().Elem()); len(alts) > 0 {
+			s := reflect.MakeSlice(v.Type(), 0, len(alts))
+			add := func(alt string) error {
+				item := reflect.New(v.Type().Elem()).Elem()
+				if err := applyAt(loc{v: item}, models.EditOp{Kind: "choose", Value: alt}); err != nil {
+					return err
+				}
+				s = reflect.Append(s, item)
+				return nil
+			}
+			for _, a := range alts {
+				if t, _ := parseIETag(a.Tag); t.mandatory && f.Name != "IEExtensions" {
+					if err := add(a.Name); err != nil {
+						return err
+					}
+				}
+			}
+			if s.Len() < minExtensionIEs && f.Name == "IEExtensions" {
+				if err := add(alts[0].Name); err != nil {
+					return err
+				}
+			}
+			v.Set(s)
 			return nil
 		}
 		// A list gets its minimum number of filled items.
@@ -773,6 +823,9 @@ func (vb *viewer) node(name, path string, l loc, c ctx, auto bool) *models.EditN
 		}
 		if alts, at := choiceOf(typ); alts != nil {
 			n.Kind, n.Alts, n.Alt = "choice", alts, chosen(v, at, alts)
+			if isIEEntry(typ) {
+				n.Hint = entryHint(typ, n.Alt) // the IE ID and criticality
+			}
 			if n.Alt != "" {
 				f, _ := typ.FieldByName(n.Alt)
 				n.Kids = []*models.EditNode{vb.node(n.Alt, joinPath(path, n.Alt), loc{v: v.FieldByIndex(f.Index), parent: v, field: f}, c, n.Auto)}
@@ -789,8 +842,9 @@ func (vb *viewer) node(name, path string, l loc, c ctx, auto bool) *models.EditN
 			fv := v.Field(i)
 			has := v.FieldByName("Has" + f.Name)
 			optional := has.IsValid() && has.Kind() == reflect.Bool
-			// Extensions are shown read-only, and only when present.
-			if extensionFields[f.Name] {
+			// Extensions are shown read-only, and only when present; an
+			// extension container of IEs libngap knows is edited.
+			if extensionFields[f.Name] && !(f.Name == "IEExtensions" && editableEntries(f.Type)) {
 				if (optional && has.Bool()) || (!optional && !fv.IsZero() && !(fv.Kind() == reflect.Slice && fv.Len() == 0)) {
 					n.Kids = append(n.Kids, &models.EditNode{Name: f.Name, Path: joinPath(path, f.Name), Kind: "ext",
 						Value: extensionText(fv), Note: "kept as it is (not edited)"})
@@ -819,7 +873,7 @@ func (vb *viewer) node(name, path string, l loc, c ctx, auto bool) *models.EditN
 		if v.Len() == 1 {
 			n.Hint = "1 item"
 		}
-		readOnly := isIEEntry(v.Type().Elem())
+		readOnly := isIEEntry(v.Type().Elem()) && !editableEntries(v.Type())
 		for i := 0; i < v.Len(); i++ {
 			ip := joinPath(path, strconv.Itoa(i))
 			if readOnly {
@@ -833,6 +887,7 @@ func (vb *viewer) node(name, path string, l loc, c ctx, auto bool) *models.EditN
 		return n
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		n.Kind, n.Value = "int", strconv.FormatInt(v.Int(), 10)
+		n.Enum = enumOptions(pt, l.field.Name)
 		bounds(tag.lb, tag.ub, tag.ext)
 		// Without an aper tag (NAS), use the range of the Go type.
 		if tag.lb == nil && tag.ub == nil {
@@ -843,6 +898,7 @@ func (vb *viewer) node(name, path string, l loc, c ctx, auto bool) *models.EditN
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		u := v.Uint()
 		n.Kind, n.Value = "int", strconv.FormatUint(u, 10)
+		n.Enum = enumOptions(pt, l.field.Name)
 		if u > decimalOnlyMax {
 			n.Hint = fmt.Sprintf("0x%x", u)
 		}
@@ -893,6 +949,13 @@ func (vb *viewer) octets(n *models.EditNode, path string, l loc, c ctx, tag aper
 		return n
 	}
 	n.Kind, n.Hint = "container", octetCount(len(b))
+	// Which NAS messages it takes, for the editor to make one there.
+	switch {
+	case kind == "nas-pdu", kind == "nas" && l.field.Name == "NASMessageContainer", kind == "nas" && pt == nasContainerType:
+		n.NAS = "5gmm"
+	case kind == "nas":
+		n.NAS = "5gsm"
+	}
 	if len(b) == 0 {
 		return n
 	}

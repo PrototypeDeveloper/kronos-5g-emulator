@@ -16,6 +16,11 @@ const (
 	BlockState                  // <state> { ... }: per subscriber, that state only
 )
 
+// Statements of a body.
+const (
+	bodyIndent = "  " // the indent of a body inside an if, in StmtLines
+)
+
 // Send modes of a signal.
 const (
 	ModeAuto    Mode = iota // patch every dynamic field (default)
@@ -70,3 +75,15 @@ const (
 	utf8ContBits = 0x80           // top two bits of a UTF-8 continuation octet
 	newFilePerm  = 0o644          // permissions of a file WriteFileAtomic creates
 )
+
+// IE containers (libngap schema).
+const (
+	maxSchemaRefs     = 16 // references followed to reach a schema type
+	criticalityReject = 0  // Criticality reject
+	criticalityIgnore = 1  // Criticality ignore
+	criticalityNotify = 2  // Criticality notify
+	minExtensionIEs   = 1  // a ProtocolExtensionContainer has at least one entry
+)
+
+// ngapTypePkg is the package of the NGAP types the schema describes.
+const ngapTypePkg = "libngap/ngapType"
