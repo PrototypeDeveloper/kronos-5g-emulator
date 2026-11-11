@@ -9,6 +9,7 @@ import (
 	libnas "libnas"
 	"libngap/ngapType"
 
+	"kronos/common/security"
 	"kronos/models"
 )
 
@@ -28,11 +29,11 @@ type Role struct {
 	nci      ngapType.BitString // 36-bit NR Cell Identity
 	snn      string             // serving network name
 	k, opc   []byte
-	ri       string // SUCI routing indicator
-	imeisv   []byte // encoded IMEISV; nil keeps the template value
-	imei     []byte // encoded IMEI of the IMEISV (IdentityResponse)
-	ea, ia   byte   // UE security capability: 5G-EA and 5G-IA octets
-	nssai    []byte // Requested NSSAI value; nil keeps the template value
+	suci     security.SUCIParams // how the SUCI conceals the IMSI
+	imeisv   []byte              // encoded IMEISV; nil keeps the template value
+	imei     []byte              // encoded IMEI of the IMEISV (IdentityResponse)
+	ea, ia   byte                // UE security capability: 5G-EA and 5G-IA octets
+	nssai    []byte              // Requested NSSAI value; nil keeps the template value
 	nextRAN  atomic.Int64
 
 	// PDU sessions (N3)

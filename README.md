@@ -10,7 +10,7 @@ Ubuntu 24.04 or later is assumed (Go 1.22 or later is needed).
 
 ```sh
 sudo apt update
-sudo apt install -y git make golang-go
+sudo apt install -y git make golang-go libcap2-bin
 
 git clone <URL of this repository> kronos-5g-emulator
 cd kronos-5g-emulator
@@ -33,14 +33,30 @@ make build GOPROXY=https://proxy.golang.org,direct
 
 2. Edit `config/config.yaml` for your network: the AMF address (`gnodeb.ngap.dst`), the local addresses (`gnodeb.ngap.src`, `gnodeb.gtpu.src`), the PLMN, the IMSI and keys of the subscribers, …
 
-3. Check the files, then start.
+3. Check the files.
 
    ```sh
    ./gnodeb check -c config/config.yaml
-   ./gnodeb -c config/config.yaml
    ```
 
-4. At the `gnodeb>` prompt, `linkup` connects to the AMF and the scenario starts. `help` lists the commands; Ctrl-D quits.
+4. Start. The TUN device of each UE (for TCP iperf and more) needs `CAP_NET_ADMIN`, so start it one of these ways:
+
+   - give it the capability with `make setcap`, which builds it too, then run it (sudo asks for your password; a new build drops the capability, so use `make setcap` for each build)
+
+     ```sh
+     make setcap
+     ./gnodeb -c config/config.yaml
+     ```
+
+   - run it with `sudo`
+
+     ```sh
+     sudo ./gnodeb -c config/config.yaml
+     ```
+
+   Without the capability it still starts, but makes no TUN devices and says so at the start.
+
+5. At the `gnodeb>` prompt, `linkup` connects to the AMF and the scenario starts. `help` lists the commands; Ctrl-D quits.
 
 With `gnodeb.web.src` set, the web console is at `http://<address of gnodeb.web.src>:<port>/` as well.
 

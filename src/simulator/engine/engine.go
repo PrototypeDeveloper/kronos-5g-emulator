@@ -56,7 +56,7 @@ func New(cfg *state.Config, sigs *scenario.SignalSet, scen *scenario.File, r rol
 	bg := context.Background()
 	e.ctx.Store(&bg)
 	e.uplane = newUplane(e)
-	if cfg.UE.TUN {
+	if hasNetAdmin() { // the UEs get TUN devices whenever gnodeb may make them
 		e.openTUN = openHostTUN
 	}
 	if !e.snap {

@@ -53,3 +53,31 @@ const (
 // accessType3GPP is the access type distinguisher of 3GPP access in the
 // K_gNB derivation (TS 33.501 A.9).
 const accessType3GPP byte = 0x01
+
+// SUCI protection schemes (TS 33.501 Annex C).
+const (
+	SchemeNull     = 0 // the MSIN in clear
+	SchemeProfileA = 1 // ECIES with X25519
+	SchemeProfileB = 2 // ECIES with secp256r1
+)
+
+// ECIES of the SUCI profiles (TS 33.501 C.3.4): the KDF (ANSI X9.63, SHA-256)
+// gives the AES-128-CTR key, its initial counter block and the HMAC-SHA-256
+// key; the MAC tag is the first 64 bits.
+const (
+	eciesEncKeyLen = 16
+	eciesICBLen    = 16
+	eciesMacKeyLen = 32
+	eciesMacLen    = 8
+	kdfCounterLen  = 4 // octets of the X9.63 counter
+)
+
+// Public key encodings.
+const (
+	x25519KeyLen      = 32   // an X25519 public key
+	p256CompressedLen = 33   // a compressed secp256r1 point: 0x02 / 0x03, then x
+	p256FullLen       = 65   // an uncompressed one: 0x04, x, y
+	p256CoordLen      = 32   // octets of a coordinate
+	p256Uncompressed  = 0x04 // the prefix of an uncompressed point
+	p256EvenY         = 0x02 // the prefix of a compressed point with an even y (0x03: odd)
+)

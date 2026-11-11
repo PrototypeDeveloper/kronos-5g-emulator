@@ -38,10 +38,9 @@ type UE struct {
 	Session      []Session  `yaml:"session"`
 	Integrity    *Integrity `yaml:"integrity"`
 	Ciphering    *Ciphering `yaml:"ciphering"`
-	// TUN gives each UE with a PDU session a TUN device on the host
-	// (kronos-ue1 …) holding the UE address, so host programs (iperf3 -B)
-	// can use the session with the kernel's TCP/IP. Needs CAP_NET_ADMIN.
-	TUN bool `yaml:"tun"`
+	// Deprecated: TUN devices come whenever gnodeb has CAP_NET_ADMIN; ue.tun
+	// is read only to say so.
+	TUN *bool `yaml:"tun"`
 
 	// Deprecated: ue.type and ue.apn are read as session[0].
 	Type string `yaml:"type"`

@@ -3,6 +3,7 @@ package state
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kronos/common/diag"
+	"kronos/common/security"
 	"kronos/models"
 )
 
@@ -186,6 +188,9 @@ func (c *Config) normalize(ds *diag.List, loc *locator) {
 	if !loc.has("ue.subscription") {
 		c.UE.Subscription = defaultSubscription
 	}
+	if c.UE.TUN != nil {
+		ds.Infof(loc.pos("ue.tun"), "ue.tun is no longer needed: the UEs get TUN devices whenever gnodeb has CAP_NET_ADMIN (sudo, or make setcap)")
+	}
 	// The deprecated ue.type / ue.apn become session 1 unless ue.session is set.
 	if c.UE.Type != "" || c.UE.APN != "" {
 		where := loc.pos("ue.type")
@@ -261,11 +266,21 @@ func (c *Config) validate(ds *diag.List, loc *locator) {
 		ds.Errorf(at("ue.imeisv"), "ue.imeisv must be 16 digits (%q)", ue.IMEISV)
 	}
 
-	// SUCI: only the null scheme is implemented.
+	// SUCI: the null scheme, or Profile A / B with the home network public key.
 	switch ue.SUCI.ProtectionScheme {
 	case suciNullScheme:
 	case suciProfileA, suciProfileB:
-		ds.Errorf(at("ue.suci.protectionscheme"), "SUCI Profile A/B (protectionscheme 1/2) is not implemented: use 0 (the null scheme)")
+		key, err := hex.DecodeString(ue.SUCI.Key)
+		switch {
+		case ue.SUCI.Key == "":
+			ds.Errorf(at("ue.suci.key"), "ue.suci.key: Profile A/B needs the home network public key (hex)")
+		case err != nil:
+			ds.Errorf(at("ue.suci.key"), "ue.suci.key is not hex: %v", err)
+		default:
+			if err := security.CheckHomeNetworkKey(ue.SUCI.ProtectionScheme, key); err != nil {
+				ds.Errorf(at("ue.suci.key"), "ue.suci.key: %v", err)
+			}
+		}
 	default:
 		ds.Errorf(at("ue.suci.protectionscheme"), "ue.suci.protectionscheme must be 0 to 2 (%d)", ue.SUCI.ProtectionScheme)
 	}

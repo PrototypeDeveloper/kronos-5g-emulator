@@ -18,7 +18,6 @@ How to use the gNodeB pseudo-call `gnodeb`. For the build and the first start, s
 10. [Mapping (auto-fix) and turning it on/off](#10-mapping-auto-fix-and-turning-it-onoff)
 11. [Communication between pseudo-calls (sync_send / sync_receive)](#11-communication-between-pseudo-calls-sync_send--sync_receive)
 12. [Logs and traces](#12-logs-and-traces)
-13. [Limitations](#13-limitations)
 
 ## 1. Overview
 
@@ -57,6 +56,8 @@ gnodeb version                                  print the version
 | `--no-web` | do not open the web console |
 | `--exec FILE` | batch: run one line at a time, stop at a failing line (exit code 1) |
 
+**Privileges:** the TUN device of each UE (chapter 9, for TCP iperf and more) needs `CAP_NET_ADMIN`. Run `./gnodeb` after `make setcap` (it builds, then gives the capability; needed after each build), or start it with `sudo ./gnodeb`. Without the capability it still starts, but makes no TUN devices and says so at the start. Started with sudo, it writes the files of `log/` as root: mind that when you start it again without sudo.
+
 `gnodeb check` reports errors (it cannot start), warnings and notes with their line and column. Run it after each change to the scenario or the signals. The start runs the same checks and does not start on an error.
 
 ## 3. config.yaml
@@ -79,7 +80,9 @@ Quote values made of digits only (IMSI, MNC, SD, TAC …) so that other YAML too
 | `imsi` | IMSI of the first subscriber (15 digits) |
 | `subscription` | number of subscribers; their IMSIs count up from `imsi` (default 1) |
 | `imeisv` | IMEISV (16 digits, optional), for Security Mode Complete and Identity Response |
-| `suci.protectionscheme` | SUCI protection scheme; only `0` (the null scheme) is supported |
+| `suci.protectionscheme` | SUCI protection scheme: `0` the null scheme (the MSIN in clear), `1` Profile A (X25519), `2` Profile B (secp256r1). With Profile A/B each Registration encrypts the MSIN with a new ephemeral key |
+| `suci.keyid` | the home network public key identifier (0–255; Profile A/B) |
+| `suci.key` | the home network public key in hex: 32 octets (64 digits) for Profile A, 33 compressed (66 digits) or 65 uncompressed octets (130 digits) for Profile B. It must pair with the private key of the 5G core (UDM) |
 | `suci.routingindicator` | routing indicator (up to 4 digits) |
 | `credential.key` / `credential.op` | key K and OP or OPc (32 hex digits) |
 | `credential.type` | `OP` or `OPC` |
@@ -87,9 +90,7 @@ Quote values made of digits only (IMSI, MNC, SD, TAC …) so that other YAML too
 | `nssai` | Requested NSSAI (a list of `sst`, `sd`; optional) |
 | `session` | the PDU sessions: `id` (1–15), `type` (`IPv4` / `IPv6` / `IPv4v6`), `dnn`, `snssai` |
 | `integrity` / `ciphering` | NIA0–3 / NEA0–3 the UE announces (default 0–2); 3 (ZUC) is not implemented |
-| `tun` | `true` gives each UE with a PDU session a TUN device on the host (chapter 9) |
-
-`ue.type` and `ue.apn` are the old form, read as the session with ID 1.
+`ue.type` and `ue.apn` are the old form, read as the session with ID 1. The former `ue.tun` is no longer needed (it is ignored, with a note).
 
 ### gnodeb (this gNB)
 
@@ -360,14 +361,12 @@ Once a PDU session is up, gnodeb uses the GTP-U tunnel with the UE's IP address.
 - `ping(dst, count, interval, size)` sends ICMP echo requests and reports the loss and the RTT (min/avg/max/mdev). It also answers pings from the DN to the UE address.
 - `iperf(dst, port, rate, time, ul|dl, len)` runs a UDP test with `iperf3 -s` on the DN (iperf3 compatible; `dl` is iperf3's `-R`).
 
-### TUN devices (ue.tun)
+### TUN devices
 
-With `ue.tun: true`, each UE with a PDU session gets a TUN device on the host holding its address (`kronos-ue1` for the first subscriber) and a source rule that sends the traffic from that address into the device. Host programs such as `iperf3` and `curl` then use the PDU session through the kernel's TCP/IP.
-
-This needs `CAP_NET_ADMIN`. Run the following after each build (`setcap` is in the `libcap2-bin` package).
+When gnodeb has `CAP_NET_ADMIN` (`./gnodeb` after `make setcap`, or `sudo ./gnodeb`; chapter 2), each UE with a PDU session gets a TUN device on the host holding its address (`kronos-ue1` for the first subscriber) and a source rule that sends the traffic from that address into the device. Nothing needs to be configured. Host programs such as `iperf3` and `curl` then use the PDU session through the kernel's TCP/IP.
 
 ```sh
-make setcap     # build, then sudo setcap cap_net_admin+ep ./gnodeb
+make setcap     # build, then sudo setcap cap_net_admin+ep ./gnodeb (setcap is in libcap2-bin)
 ```
 
 ```sh
@@ -462,13 +461,3 @@ Written to `log/` in the current directory.
 |---|---|
 | `log/gnodeb.txt` | the application log |
 | `log/trace-YYYYMMDD-HHMMSS.jsonl` | every event (PDUs sent and received in hex, state changes, snap, warnings …), one JSON object per line |
-
-## 13. Limitations
-
-- SUCI: the null scheme only (Profile A/B are not implemented).
-- 128-NEA3 / 128-NIA3 (ZUC) are not implemented.
-- EAP-AKA' authentication is not supported (5G AKA only).
-- The AMF role (reversed mode) is not implemented.
-- Paging by I-RNTI (RRC_INACTIVE) is not supported.
-- NAS messages libnas cannot decode are only recognized by name.
-- Rel-17/18 messages such as MBS and AIoT get the NGAP ID and ULI fixes only.

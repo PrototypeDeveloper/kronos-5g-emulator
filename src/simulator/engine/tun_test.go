@@ -114,7 +114,7 @@ func echoRequest(src, dst netip.Addr, id, seq uint16) []byte {
 	return append(ip, icmp...)
 }
 
-// TestTUN checks the data path of ue.tun: the host's packets from the UE
+// TestTUN checks the data path of a TUN device: the host's packets from the UE
 // address go uplink through the session, downlink packets that no built-in
 // endpoint takes come back to the host, and the built-in ping keeps its own.
 func TestTUN(t *testing.T) {

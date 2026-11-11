@@ -155,7 +155,7 @@ func (s *subscriber) iperfTCP(a models.IperfArgs, dst netip.Addr, t models.Tunne
 	x := s.tun.Load()
 	switch {
 	case x == nil && s.e.openTUN == nil:
-		return errors.New("iperftcp runs through the UE's TUN device: set tun: true under ue: in the config (gnodeb needs CAP_NET_ADMIN)")
+		return errors.New("iperftcp runs through the UE's TUN device, which needs CAP_NET_ADMIN: start gnodeb with sudo, or build it with make setcap")
 	case x == nil:
 		return errors.New("the UE has no TUN device (see the TUN error when the session came up)")
 	case x.ueIP != t.UEIP:

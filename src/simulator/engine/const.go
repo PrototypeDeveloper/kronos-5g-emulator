@@ -51,7 +51,7 @@ const (
 	icmpEchoReply   = 0
 )
 
-// TUN devices (ue.tun).
+// TUN devices (with CAP_NET_ADMIN).
 const (
 	// tunMTU leaves room for the G-PDU around the packet in a 1500-octet
 	// frame: IPv4 20, UDP 8, GTP-U 8 and its PDU Session Container 8.

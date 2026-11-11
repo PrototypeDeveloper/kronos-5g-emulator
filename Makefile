@@ -1,6 +1,6 @@
 # kronos-5g-emulator
 #   make build      build ./gnodeb at the repository root (one static binary; the web console is built in)
-#   make setcap     build, then give ./gnodeb CAP_NET_ADMIN with sudo (for ue.tun; a build drops it)
+#   make setcap     build, then give ./gnodeb CAP_NET_ADMIN with sudo (for the UEs' TUN devices; a build drops it)
 #   make test       run the unit tests of the kronos module
 #   make test-lib   run the tests of libnas / libngap / libgtp
 #   make check      validate config/config.yaml, signal.txt and scenario.txt
@@ -27,8 +27,8 @@ all: build
 build:
 	cd $(SRC) && CGO_ENABLED=0 $(GO) build -o ../$(BIN) ./cmd
 
-# ue.tun creates TUN devices and routing, which needs CAP_NET_ADMIN.
-# Writing the binary drops the capability, so this runs after each build.
+# The UEs' TUN devices (iperftcp) need CAP_NET_ADMIN: this gives it to
+# ./gnodeb (or start it with sudo). A build drops it, so run it after each build.
 setcap: build
 	sudo setcap cap_net_admin+ep ./$(BIN)
 

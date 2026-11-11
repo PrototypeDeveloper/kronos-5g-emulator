@@ -148,3 +148,33 @@ func TestBrokenYAML(t *testing.T) {
 		t.Fatal("missing file")
 	}
 }
+
+// SUCI Profile A and B take the home network public key of their curve.
+func TestSUCIProfileConfig(t *testing.T) {
+	const a = "5a8d38864820197c3394b92613b20b91633cbd897119273bf8e4a6f4eec0a650"
+	const b = "0272da71976234ce833a6907425867b82e074d44ef907dfb4b3e21c1c2256ebcd1"
+	for suci, want := range map[string]string{
+		"{ protectionscheme: 1, keyid: 1, key: " + a + " }": "",
+		"{ protectionscheme: 2, keyid: 2, key: " + b + " }": "",
+		"{ protectionscheme: 1, keyid: 1 }":                 "Profile A/B needs the home network public key",
+		"{ protectionscheme: 1, key: zz }":                  "ue.suci.key is not hex",
+		"{ protectionscheme: 1, key: " + b + " }":           "Profile A takes a 32-octet X25519 public key",
+		"{ protectionscheme: 2, key: " + a + " }":           "Profile B takes a secp256r1 public key",
+		"{ protectionscheme: 3 }":                           "must be 0 to 2",
+	} {
+		src := strings.Replace(base, `  imsi: "208930000000001"`, `  imsi: "208930000000001"`+"\n  suci: "+suci, 1)
+		_, ds := load(t, src)
+		if text := joinDiags(ds); want == "" && strings.Contains(text, "suci") || want != "" && !strings.Contains(text, want) {
+			t.Errorf("%s → want %q, got:\n%s", suci, want, text)
+		}
+	}
+}
+
+// ue.tun of older configs is read, only to say it is no longer needed.
+func TestTUNKeyIsNoLongerNeeded(t *testing.T) {
+	src := strings.Replace(base, `  imsi: "208930000000001"`, `  imsi: "208930000000001"`+"\n  tun: true", 1)
+	_, ds := load(t, src)
+	if text := joinDiags(ds); ds.HasErrors() || !strings.Contains(text, "info: ue.tun is no longer needed") {
+		t.Fatal(text)
+	}
+}

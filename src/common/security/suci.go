@@ -1,6 +1,8 @@
 package security
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
 	"fmt"
 
 	"kronos/common/plmn"
@@ -10,6 +12,35 @@ import (
 // the null protection scheme (TS 24.501 §9.11.3.4, TS 33.501 Annex C): the
 // MSIN goes out in clear BCD and the home network public key ID is 0.
 func NullSUCI(mcc, mnc, routingIndicator, msin string) ([]byte, error) {
+	out, err := suciHead(mcc, mnc, routingIndicator, msin)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, SchemeNull, 0) // protection scheme null, home network public key ID 0
+	return append(out, msinBCD(msin)...), nil
+}
+
+// SUCI encodes the SUCI of p: with the null scheme the MSIN goes in clear;
+// with Profile A or B it is encrypted for the home network public key
+// (ECIES, with a new ephemeral key each time; TS 33.501 C.3).
+func SUCI(p SUCIParams, msin string) ([]byte, error) {
+	if p.Scheme == SchemeNull {
+		return NullSUCI(p.MCC, p.MNC, p.RoutingIndicator, msin)
+	}
+	out, err := suciHead(p.MCC, p.MNC, p.RoutingIndicator, msin)
+	if err != nil {
+		return nil, err
+	}
+	so, err := protect(p.Scheme, p.HomeNetworkKey, msinBCD(msin), func(c ecdh.Curve) (*ecdh.PrivateKey, error) { return c.GenerateKey(rand.Reader) })
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, byte(p.Scheme), byte(p.KeyID))
+	return append(out, so...), nil
+}
+
+// suciHead is the start of a SUCI: the type, the PLMN and the routing indicator.
+func suciHead(mcc, mnc, routingIndicator, msin string) ([]byte, error) {
 	p, ok := plmn.Encode(mcc, mnc)
 	if !ok {
 		return nil, fmt.Errorf("suci: invalid PLMN %s/%s", mcc, mnc)
@@ -22,10 +53,11 @@ func NullSUCI(mcc, mnc, routingIndicator, msin string) ([]byte, error) {
 	}
 	out := []byte{identityTypeSUCI} // SUPI format IMSI, type of identity SUCI
 	out = append(out, p...)
-	out = append(out, bcd(routingIndicator, maxRoutingIndicatorDigits)...)
-	out = append(out, 0x00, 0x00) // protection scheme null, home network public key ID 0
-	return append(out, bcd(msin, len(msin)+len(msin)%2)...), nil
+	return append(out, bcd(routingIndicator, maxRoutingIndicatorDigits)...), nil
 }
+
+// msinBCD is the MSIN in BCD, padded with F to whole octets: the scheme input.
+func msinBCD(msin string) []byte { return bcd(msin, len(msin)+len(msin)%2) }
 
 // digits reports whether every character of s is a decimal digit.
 func digits(s string) bool {

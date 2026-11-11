@@ -320,7 +320,7 @@ func (u *UE) patchRegistrationRequest(t *nasMessage.RegistrationRequest, inConta
 	if len(t.MobileIdentity) > 0 && u.off.On(models.MapIdentity) {
 		switch t.MobileIdentity[0] & identityTypeMask {
 		case nasType.MobileIdentitySUCI:
-			if suci, err := security.NullSUCI(u.r.mcc, u.r.mnc, u.r.ri, u.msin); err == nil {
+			if suci, err := security.SUCI(u.r.suci, u.msin); err == nil {
 				t.MobileIdentity = suci
 			}
 		case nasType.MobileIdentity5GGUTI:

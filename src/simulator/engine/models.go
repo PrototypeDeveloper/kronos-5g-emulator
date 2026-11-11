@@ -40,7 +40,7 @@ type Engine struct {
 	peer         *peer.Client  // sync_send; nil without gnodeb.http
 	routes       *routes
 	uplane       *uplane
-	openTUN      tunOpener                       // nil without ue.tun
+	openTUN      tunOpener                       // nil without CAP_NET_ADMIN
 	ctx          atomic.Pointer[context.Context] // set by Start (runCtx reads it); ends background work such as ping
 	started      time.Time
 
@@ -189,7 +189,7 @@ type subscriber struct {
 	stack   *traffic.Stack          // the UE's IP endpoints (ping, iperf); safe for concurrent use
 	runs    trafficRuns             // the pings and iperfs running
 	timers  timers                  // the running scenario timers (timer(t))
-	tun     atomic.Pointer[ueTUN]   // the host TUN device (ue.tun); the N3 reader writes to it
+	tun     atomic.Pointer[ueTUN]   // the host TUN device; the N3 reader writes to it
 
 	// stat is the snapshot the web console reads without stopping the actor;
 	// the actor refreshes it after each message.

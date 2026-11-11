@@ -71,7 +71,16 @@ func (r *Role) loadSubscriber(cfg *state.Config) error {
 			return err
 		}
 	}
-	r.ri = u.SUCI.RoutingIndicator
+	// SUCI: the null scheme, or Profile A / B with the home network public key.
+	r.suci = security.SUCIParams{MCC: r.mcc, MNC: r.mnc, RoutingIndicator: u.SUCI.RoutingIndicator, Scheme: u.SUCI.ProtectionScheme, KeyID: u.SUCI.KeyID}
+	if r.suci.Scheme != security.SchemeNull {
+		if r.suci.HomeNetworkKey, err = hex.DecodeString(u.SUCI.Key); err != nil {
+			return fmt.Errorf("ue.suci.key: %v", err)
+		}
+		if err := security.CheckHomeNetworkKey(r.suci.Scheme, r.suci.HomeNetworkKey); err != nil {
+			return fmt.Errorf("ue.suci.key: %v", err)
+		}
+	}
 	if u.IMEISV != "" {
 		if r.imeisv, err = security.IMEISV(u.IMEISV); err != nil {
 			return err

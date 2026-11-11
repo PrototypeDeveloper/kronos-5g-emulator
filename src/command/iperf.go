@@ -48,7 +48,7 @@ func init() {
 		},
 		Scope: ScopeUE,
 		Where: InScenario | Interactive,
-		Help: "run a TCP test with an iperf3 server (iperf3 -s) on the DN through the UE's TUN device (ue.tun: true in the config): " +
+		Help: "run a TCP test with an iperf3 server (iperf3 -s) on the DN through the UE's TUN device (gnodeb needs CAP_NET_ADMIN: sudo, or make setcap): " +
 			"port (default 5201), rate (default 0, as fast as TCP goes; 100M, 1G …), time (default 10s), " +
 			"dir ul (uplink, default) or dl (downlink, iperf3 -R), len the octets per write (default 131072)",
 		Check: checkIperf(true),

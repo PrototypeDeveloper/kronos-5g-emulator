@@ -120,7 +120,7 @@ func (u *uplane) downlink(teid uint32, pkt []byte) {
 		}
 	}
 	if !r.s.stack.Deliver(pkt) {
-		r.s.toTUN(pkt) // with ue.tun, the host's TCP/IP gets the rest
+		r.s.toTUN(pkt) // with a TUN device, the host's TCP/IP gets the rest
 	}
 }
 

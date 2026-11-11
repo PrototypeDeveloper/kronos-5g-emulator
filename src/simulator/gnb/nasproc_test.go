@@ -59,7 +59,7 @@ func TestIdentityResponse(t *testing.T) {
 	u := r.NewUE(0, "001010000000001").(*UE)
 	u.ranID, u.hasRAN, u.amfID, u.hasAMF = 1, true, 100, true
 	u.guti = h("f202f839cafe0000000001")
-	suci, _ := security.NullSUCI("001", "01", r.ri, u.msin)
+	suci, _ := security.NullSUCI("001", "01", r.suci.RoutingIndicator, u.msin)
 	for typ, want := range map[uint8][]byte{
 		nasType.MobileIdentitySUCI: suci, nasType.MobileIdentity5GGUTI: u.guti, identityIMEI: r.imei, identityIMEISV: r.imeisv,
 		identity5GSTMSI: h("f4fe0000000001"), // AMF set ID and pointer, 5G-TMSI of the 5G-GUTI
@@ -164,5 +164,29 @@ func TestNASProceduresOfTheUE(t *testing.T) {
 	dlNAS(t, u, &nasMessage.AuthenticationReject{})
 	if u.registered || u.guti != nil || u.sec != nil || u.ngKSI != noKey || len(u.sessions) != 0 {
 		t.Fatalf("after AuthenticationReject %+v", u)
+	}
+}
+
+// With Profile A the Registration Request carries a concealed SUCI, new each time.
+func TestRegistrationSUCIProfileA(t *testing.T) {
+	r := autoRole(t, `, suci: { protectionscheme: 1, keyid: 1, key: 5a8d38864820197c3394b92613b20b91633cbd897119273bf8e4a6f4eec0a650 }`)
+	u := r.NewUE(0, "001010000000001").(*UE)
+	sigs, _ := scenario.ReadSignals("../../../config/signal.txt")
+	reg, _ := sigs.Lookup("InitialUEMeesageRegistrationRequest")
+	suci := func() []byte {
+		built, err := u.Build(reg, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, _ := libngap.Decode(built.PDU)
+		nas, _ := libnas.Decode(m.(*ngapMessage.InitialUEMessage).NASPDU.Value, nil)
+		return nas.(*nasMessage.RegistrationRequest).MobileIdentity
+	}
+	a, b := suci(), suci()
+	// type SUCI, PLMN 001/01, routing indicator, scheme 1, key ID 1, then
+	// the ephemeral key (32), the encrypted MSIN (5) and the MAC tag (8).
+	head := h("0100f110f0ff0101")
+	if !bytes.HasPrefix(a, head) || len(a) != len(head)+32+5+8 || bytes.Equal(a, b) {
+		t.Fatalf("SUCI %x (another %x)", a, b)
 	}
 }

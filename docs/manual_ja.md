@@ -18,7 +18,6 @@ gNodeB 疑似呼 `gnodeb` の使い方をまとめます。ビルドと最初の
 10. [マッピング（自動補正）と ON/OFF](#10-マッピング自動補正と-onoff)
 11. [疑似呼間通信（sync_send / sync_receive）](#11-疑似呼間通信sync_send--sync_receive)
 12. [ログとトレース](#12-ログとトレース)
-13. [制限事項](#13-制限事項)
 
 ## 1. 概要
 
@@ -57,6 +56,8 @@ gnodeb version                                  版を表示する
 | `--no-web` | Web コンソールを開かない |
 | `--exec FILE` | バッチ。1 行ずつ実行し、失敗した行で止まる（終了コード 1） |
 
+**権限:** UE ごとの TUN デバイス（9 章。TCP の iperf などに使う）を作るには `CAP_NET_ADMIN` が要ります。`make setcap`（ビルドしてから権限を付ける。ビルドのたびに必要）のあとで `./gnodeb` を実行するか、`sudo ./gnodeb` で起動してください。権限が無くても起動はしますが、TUN デバイスは作られず、起動時にその旨を表示します。sudo で起動すると `log/` のファイルが root の持ち物になるので、あとで権限なしで起動するときは注意してください。
+
 `gnodeb check` は、エラー（起動できない）・警告・情報を行と列つきで表示します。シナリオや信号を書き換えたら、まず `check` を通してください。起動時にも同じ検証をし、エラーがあれば起動しません。
 
 ## 3. config.yaml
@@ -79,7 +80,9 @@ gnodeb version                                  版を表示する
 | `imsi` | 先頭の加入者の IMSI（15 桁） |
 | `subscription` | 加入者の数。IMSI は `imsi` から連番になる（既定 1） |
 | `imeisv` | IMEISV（16 桁。任意）。Security Mode Complete と Identity Response に使う |
-| `suci.protectionscheme` | SUCI の保護方式。`0`（null スキーム）だけに対応 |
+| `suci.protectionscheme` | SUCI の保護方式: `0` null スキーム（MSIN を平文で送る）、`1` Profile A（X25519）、`2` Profile B（secp256r1）。Profile A/B では、Registration のたびに新しい一時鍵で MSIN を暗号化する |
+| `suci.keyid` | ホームネットワークの公開鍵の ID（0〜255。Profile A/B） |
+| `suci.key` | ホームネットワークの公開鍵（16 進）。Profile A は 32 オクテット（64 桁）、Profile B は圧縮形式の 33 オクテット（66 桁）か非圧縮の 65 オクテット（130 桁）。5G コア（UDM）にある秘密鍵と対になっていること |
 | `suci.routingindicator` | ルーティング指示子（4 桁まで） |
 | `credential.key` / `credential.op` | 鍵 K と OP または OPc（32 桁の 16 進） |
 | `credential.type` | `OP` か `OPC` |
@@ -87,9 +90,7 @@ gnodeb version                                  版を表示する
 | `nssai` | Requested NSSAI（`sst`、`sd` のリスト。任意） |
 | `session` | PDU セッションのリスト: `id`（1〜15）、`type`（`IPv4` / `IPv6` / `IPv4v6`）、`dnn`、`snssai` |
 | `integrity` / `ciphering` | UE が対応を申告する NIA0〜3 / NEA0〜3（既定は 0〜2）。3（ZUC）は未実装 |
-| `tun` | `true` で、PDU セッションを持つ UE ごとにホストに TUN デバイスを作る（9 章） |
-
-`ue.type` と `ue.apn` は古い書き方で、`session` の ID 1 として読みます。
+`ue.type` と `ue.apn` は古い書き方で、`session` の ID 1 として読みます。以前の `ue.tun` は不要になりました（書いてあっても無視し、その旨を表示します）。
 
 ### gnodeb（自局）
 
@@ -360,14 +361,12 @@ PDU セッションが確立すると、gnodeb は UE の IP アドレスで GTP
 - `ping(宛先, 回数, 間隔, サイズ)`: ICMP Echo を送り、損失と RTT（min/avg/max/mdev）を表示します。DN 側から UE のアドレスへの ping にも応答します。
 - `iperf(宛先, ポート, 帯域, 時間, ul|dl, 長さ)`: DN で動いている `iperf3 -s` を相手に UDP の試験をします（iperf3 互換。`dl` は iperf3 の `-R`）。
 
-### TUN デバイス（ue.tun）
+### TUN デバイス
 
-`ue.tun: true` にすると、PDU セッションを持つ UE ごとに、UE のアドレスを持つ TUN デバイス（先頭の加入者は `kronos-ue1`）と、そのアドレスから送る通信をデバイスに流す送信元ルールをホストに作ります。ホストの `iperf3` や `curl` などが、カーネルの TCP/IP で PDU セッションを使えます。
-
-作成には `CAP_NET_ADMIN` が必要です。ビルドのたびに次を実行してください（`setcap` は `libcap2-bin` パッケージにあります）。
+gnodeb に `CAP_NET_ADMIN` があれば（`make setcap` のあとの `./gnodeb`、または `sudo ./gnodeb`。2 章）、PDU セッションを持つ UE ごとに、UE のアドレスを持つ TUN デバイス（先頭の加入者は `kronos-ue1`）と、そのアドレスから送る通信をデバイスに流す送信元ルールをホストに作ります。設定は要りません。ホストの `iperf3` や `curl` などが、カーネルの TCP/IP で PDU セッションを使えます。
 
 ```sh
-make setcap     # ビルドしてから sudo setcap cap_net_admin+ep ./gnodeb を実行する
+make setcap     # ビルドしてから sudo setcap cap_net_admin+ep ./gnodeb を実行する（setcap は libcap2-bin パッケージ）
 ```
 
 ```sh
@@ -462,13 +461,3 @@ Content-Type: application/json
 |---|---|
 | `log/gnodeb.txt` | アプリケーションのログ |
 | `log/trace-YYYYMMDD-HHMMSS.jsonl` | 全イベント（送受信した PDU の 16 進、状態の変化、snap、警告など）を 1 行 1 件の JSON で |
-
-## 13. 制限事項
-
-- SUCI は null スキームだけです（Profile A/B は未実装）。
-- 128-NEA3 / 128-NIA3（ZUC）は未実装です。
-- EAP-AKA' の認証には対応していません（5G AKA のみ）。
-- AMF の役（反転動作）は未実装です。
-- I-RNTI による Paging（RRC_INACTIVE）には対応していません。
-- libnas がデコードできない NAS メッセージは、名前の判定だけ行います。
-- Rel-17/18 の MBS・AIoT などのメッセージは、NGAP ID と ULI の補正だけ行います。

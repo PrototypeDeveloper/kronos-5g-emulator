@@ -128,9 +128,9 @@ func start(ctx context.Context, o options, stdin io.Reader, stdout, stderr io.Wr
 		hint = "linkup connects SCTP, Ctrl-C quits"
 	}
 	con.line(fmt.Sprintf("%s %s: %s (%d subscriber(s), snap %s). %s", progName, o.version, cfg.Path, cfg.UE.Subscription, snap, hint))
-	if cfg.UE.TUN && !tun.HasNetAdmin() {
-		con.line("ue.tun is on, but " + progName + " does not have CAP_NET_ADMIN, so the UEs get no TUN device: " +
-			"run sudo setcap cap_net_admin+ep ./" + progName + " after each build, or start it as root")
+	if !tun.HasNetAdmin() {
+		con.line(progName + " does not have CAP_NET_ADMIN, so the UEs get no TUN device (iperftcp and host programs " +
+			"bound to a UE address do not work): start it with sudo, or build it with make setcap")
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

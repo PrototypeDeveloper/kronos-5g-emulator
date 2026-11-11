@@ -10,7 +10,7 @@ Ubuntu 24.04 以降を想定しています（Go 1.22 以降が必要です）�
 
 ```sh
 sudo apt update
-sudo apt install -y git make golang-go
+sudo apt install -y git make golang-go libcap2-bin
 
 git clone <このリポジトリの URL> kronos-5g-emulator
 cd kronos-5g-emulator
@@ -33,14 +33,30 @@ make build GOPROXY=https://proxy.golang.org,direct
 
 2. `config/config.yaml` を環境に合わせて編集します（AMF のアドレス `gnodeb.ngap.dst`、自局のアドレス `gnodeb.ngap.src` / `gnodeb.gtpu.src`、PLMN、加入者の IMSI と鍵など）。
 
-3. 設定を検証してから起動します。
+3. 設定を検証します。
 
    ```sh
    ./gnodeb check -c config/config.yaml
-   ./gnodeb -c config/config.yaml
    ```
 
-4. `gnodeb>` のプロンプトで `linkup` と入力すると AMF に接続し、シナリオが動き始めます。`help` でコマンドの一覧、Ctrl-D で終了です。
+4. 起動します。UE ごとの TUN デバイス（TCP の iperf などに使います）を作るのに `CAP_NET_ADMIN` が要るので、次のどちらかで起動します。
+
+   - `make setcap` でビルドと同時に権限を付けてから実行する（sudo のパスワードを聞かれます。ビルドし直すと権限が外れるので、ビルドのたびに `make setcap` を使います）
+
+     ```sh
+     make setcap
+     ./gnodeb -c config/config.yaml
+     ```
+
+   - `sudo` で実行する
+
+     ```sh
+     sudo ./gnodeb -c config/config.yaml
+     ```
+
+   権限が無くても起動はしますが、TUN デバイスは作られず、起動時にその旨を表示します。
+
+5. `gnodeb>` のプロンプトで `linkup` と入力すると AMF に接続し、シナリオが動き始めます。`help` でコマンドの一覧、Ctrl-D で終了です。
 
 `gnodeb.web.src` を設定していれば、ブラウザで `http://<gnodeb.web.src のアドレス>:<ポート>/` を開くと Web コンソールからも操作できます。
 

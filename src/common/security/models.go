@@ -10,3 +10,12 @@ type Milenage struct {
 	block cipher.Block
 	opc   [16]byte
 }
+
+// SUCIParams is how a subscriber conceals its SUPI in the SUCI (ue.suci).
+type SUCIParams struct {
+	MCC, MNC         string
+	RoutingIndicator string
+	Scheme           int    // SchemeNull, SchemeProfileA or SchemeProfileB
+	KeyID            int    // the home network public key identifier
+	HomeNetworkKey   []byte // the home network public key (Profile A/B)
+}

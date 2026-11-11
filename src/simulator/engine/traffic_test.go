@@ -117,9 +117,9 @@ func TestTrafficThroughN3(t *testing.T) {
 	exec("stop")
 	text("stopped iperf", "iperf 10.10.10.20:13531: stopped")
 
-	// iperftcp needs the UE's TUN device (ue.tun).
-	if _, err := hs.eng.Exec(imsi + "iperftcp(10.10.10.20, 13531)"); err == nil || !strings.Contains(err.Error(), "set tun: true under ue:") {
-		t.Fatalf("iperftcp without ue.tun: %v", err)
+	// iperftcp needs the UE's TUN device, which needs CAP_NET_ADMIN.
+	if _, err := hs.eng.Exec(imsi + "iperftcp(10.10.10.20, 13531)"); err == nil || !strings.Contains(err.Error(), "start gnodeb with sudo, or build it with make setcap") {
+		t.Fatalf("iperftcp without a TUN device: %v", err)
 	}
 
 	// Without a session there is nothing to run on.

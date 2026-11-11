@@ -17,7 +17,7 @@ import (
 )
 
 // TCP tests use the host's TCP/IP: the sockets bind to the UE address, and
-// the UE's TUN device (ue.tun) routes them through the PDU session.
+// the UE's TUN device routes them through the PDU session.
 
 // Check validates the options and fills the defaults.
 func (o *TCPOptions) Check() error {

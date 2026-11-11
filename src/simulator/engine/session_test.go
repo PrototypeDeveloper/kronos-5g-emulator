@@ -284,7 +284,7 @@ any {
 // release.
 func TestReleases(t *testing.T) {
 	hs := startN3(t, true, 1, releaseScenario, freeUDPPort(t), freeUDPPort(t))
-	ft := useFakeTUN(hs) // ue.tun: the device follows the session
+	ft := useFakeTUN(hs) // a TUN device follows the session
 	hs.linkup(t)
 	amfSec, ran := register(t, hs)
 	establish(t, hs, amfSec, ran)

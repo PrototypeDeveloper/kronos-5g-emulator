@@ -18,7 +18,7 @@ func (u *UE) patchIdentityResponse(t *nasMessage.IdentityResponse) error {
 	}
 	switch typ {
 	case nasType.MobileIdentitySUCI:
-		suci, err := security.NullSUCI(u.r.mcc, u.r.mnc, u.r.ri, u.msin)
+		suci, err := security.SUCI(u.r.suci, u.msin)
 		if err != nil {
 			return err
 		}

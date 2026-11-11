@@ -9,13 +9,17 @@ import (
 	"kronos/traffic/tun"
 )
 
-// With ue.tun, a subscriber whose PDU session is up gets a TUN device on the
+// When gnodeb has CAP_NET_ADMIN (make setcap, or sudo), a subscriber whose
+// PDU session is up gets a TUN device on the
 // host (kronos-ue1 for the first subscriber) that holds the UE address. What
 // the host sends from that address (iperf3 -B, curl --interface) is read
 // from the device and sent uplink through the session; downlink packets that
 // no built-in endpoint (ping, iperf) takes are written to it. The device
 // stays while the UE is idle (uplink packets are dropped then) and goes with
 // the session, a linkdown or the end of the engine.
+
+// hasNetAdmin reports whether gnodeb may make TUN devices (tests turn it off).
+var hasNetAdmin = tun.HasNetAdmin
 
 // tunDevice is an open TUN device (tun.Device; a fake in tests).
 type tunDevice interface {
