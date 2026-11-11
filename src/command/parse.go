@@ -3,6 +3,7 @@ package command
 import (
 	"errors"
 	"net/netip"
+	"strconv"
 	"strings"
 
 	"kronos/common/diag"
@@ -32,6 +33,15 @@ func (e Expr) String() string {
 		return e.X.String() + " " + e.Op + " " + e.Y.String()
 	case ExprAssign:
 		return e.Name + " = " + e.Y.String()
+	case ExprField:
+		s := "$" + e.Name
+		for _, f := range e.Path {
+			s += "." + f.Name
+			if f.HasIndex {
+				s += "[" + strconv.Itoa(f.Index) + "]"
+			}
+		}
+		return s
 	default:
 		return e.Name
 	}
@@ -195,6 +205,9 @@ func parsePrimary(lx *Lexer) (Expr, error) {
 	case TokIdent:
 		return Expr{Kind: ExprIdent, Name: t.Text, Pos: t.Pos}, nil
 	case TokBuiltin:
+		if lx.Peek().Kind == TokDot {
+			return parseField(lx, t)
+		}
 		return Expr{Kind: ExprBuiltin, Name: t.Text, Pos: t.Pos}, nil
 	case TokInt, TokFloat, TokDuration, TokString:
 		if t.Val.Type == TypeNone {
@@ -271,4 +284,31 @@ func ParseLine(src string) (Line, error) {
 		return ln, errAt(t, "unexpected text after the command (%s)", t.Describe())
 	}
 	return ln, nil
+}
+
+// parseField parses the path after $nas or $ngap: names joined by dots,
+// each with an optional [index], e.g. $ngap.PDUSessionResourceSetupListSUReq[0].PDUSessionID.
+func parseField(lx *Lexer, b Token) (Expr, error) {
+	e := Expr{Kind: ExprField, Name: b.Text, Pos: b.Pos}
+	for lx.Peek().Kind == TokDot {
+		lx.Next()
+		n := lx.Next()
+		if n.Kind != TokIdent {
+			return Expr{}, errAt(n, "$%s. must be followed by the name of an IE (%s)", b.Text, n.Found())
+		}
+		seg := FieldSeg{Name: n.Text}
+		if lx.Peek().Kind == TokLBracket {
+			lx.Next()
+			i := lx.Next()
+			if i.Kind != TokInt || i.Val.Type != TypeInt || i.Val.Int < 0 {
+				return Expr{}, errAt(i, "[ takes the index of a list item, from 0 (%s)", i.Found())
+			}
+			if r := lx.Next(); r.Kind != TokRBracket {
+				return Expr{}, errAt(r, "[%d needs a closing ] (%s)", i.Val.Int, r.Found())
+			}
+			seg.Index, seg.HasIndex = int(i.Val.Int), true
+		}
+		e.Path = append(e.Path, seg)
+	}
+	return e, nil
 }

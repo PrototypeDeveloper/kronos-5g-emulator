@@ -244,6 +244,7 @@ type fakeEnv struct {
 	failOn string
 	vars   map[string]Value // values set by set (a is 7 and s "test" before)
 	mapOff models.MapOff
+	fields map[string]Value // IEs of the received message by $nas.X / $ngap.X
 }
 
 func (e *fakeEnv) Scope() Scope { return e.scope }
@@ -320,6 +321,10 @@ func (e *fakeEnv) Stop(kind string) error {
 func (e *fakeEnv) Sleep(d time.Duration) error {
 	e.log = append(e.log, "sleep "+d.String())
 	return nil
+}
+func (e *fakeEnv) Field(proto string, path []FieldSeg) (Value, error) {
+	k := Expr{Kind: ExprField, Name: proto, Path: path}.String()
+	return e.fields[k], nil // missing: TypeNone
 }
 func (e *fakeEnv) Builtin(n string) (Value, error) {
 	if n == "imsi" {

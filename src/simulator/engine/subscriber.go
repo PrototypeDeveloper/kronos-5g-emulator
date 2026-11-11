@@ -131,6 +131,7 @@ func (s *subscriber) reset() {
 // receive handles a UE-associated PDU: the role's UE context, routes, N3 tunnels and the matching handler.
 func (s *subscriber) receive(m ueRx) {
 	in := s.ue.Receive(m.msg)
+	s.rx = newReceived(m.msg, in.Plain)
 	info, _ := scenario.NGAPOf(m.msg)
 	// Remember the IDs that route later PDUs (AMF-UE-NGAP-ID, 5G-S-TMSI for Paging).
 	if amf, ok := s.ue.AMFID(); ok {

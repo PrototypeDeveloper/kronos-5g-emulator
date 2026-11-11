@@ -64,6 +64,46 @@ func encodePlain(value any) ([]byte, error) {
 		return m.Encode()
 	case *nasMessage.Status5GSM:
 		return m.Encode()
+	case *nasMessage.DeregistrationRequestNW:
+		return m.Encode()
+	case *nasMessage.DeregistrationAcceptNW:
+		return m.Encode()
+	case *nasMessage.ServiceReject:
+		return m.Encode()
+	case *nasMessage.ControlPlaneServiceRequest:
+		return m.Encode()
+	case *nasMessage.NetworkSliceSpecificAuthenticationCommand:
+		return m.Encode()
+	case *nasMessage.NetworkSliceSpecificAuthenticationComplete:
+		return m.Encode()
+	case *nasMessage.NetworkSliceSpecificAuthenticationResult:
+		return m.Encode()
+	case *nasMessage.ConfigurationUpdateCommand:
+		return m.Encode()
+	case *nasMessage.ConfigurationUpdateComplete:
+		return m.Encode()
+	case *nasMessage.AuthenticationResult:
+		return m.Encode()
+	case *nasMessage.Notification:
+		return m.Encode()
+	case *nasMessage.NotificationResponse:
+		return m.Encode()
+	case *nasMessage.PDUSessionAuthenticationCommand:
+		return m.Encode()
+	case *nasMessage.PDUSessionAuthenticationComplete:
+		return m.Encode()
+	case *nasMessage.PDUSessionAuthenticationResult:
+		return m.Encode()
+	case *nasMessage.PDUSessionModificationRequest:
+		return m.Encode()
+	case *nasMessage.PDUSessionModificationReject:
+		return m.Encode()
+	case *nasMessage.PDUSessionModificationCommand:
+		return m.Encode()
+	case *nasMessage.PDUSessionModificationComplete:
+		return m.Encode()
+	case *nasMessage.PDUSessionModificationCommandReject:
+		return m.Encode()
 	default:
 		return nil, fmt.Errorf("unsupported NAS message type: %T", value)
 	}
@@ -218,7 +258,55 @@ func decodePlain(data []byte) (any, error) {
 			return nil, e
 		}
 		return m, nil
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgDeregistrationRequestNW}:
+		return decoded(nasMessage.DecodeDeregistrationRequestNW(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgDeregistrationAcceptNW}:
+		return decoded(nasMessage.DecodeDeregistrationAcceptNW(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgServiceReject}:
+		return decoded(nasMessage.DecodeServiceReject(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgControlPlaneServiceRequest}:
+		return decoded(nasMessage.DecodeControlPlaneServiceRequest(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgNetworkSliceSpecificAuthenticationCommand}:
+		return decoded(nasMessage.DecodeNetworkSliceSpecificAuthenticationCommand(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgNetworkSliceSpecificAuthenticationComplete}:
+		return decoded(nasMessage.DecodeNetworkSliceSpecificAuthenticationComplete(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgNetworkSliceSpecificAuthenticationResult}:
+		return decoded(nasMessage.DecodeNetworkSliceSpecificAuthenticationResult(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgConfigurationUpdateCommand}:
+		return decoded(nasMessage.DecodeConfigurationUpdateCommand(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgConfigurationUpdateComplete}:
+		return decoded(nasMessage.DecodeConfigurationUpdateComplete(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgAuthenticationResult}:
+		return decoded(nasMessage.DecodeAuthenticationResult(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgNotification}:
+		return decoded(nasMessage.DecodeNotification(data))
+	case [2]uint8{nasType.EPD5GMM, nasType.MsgNotificationResponse}:
+		return decoded(nasMessage.DecodeNotificationResponse(data))
+	case [2]uint8{nasType.EPD5GSM, nasType.MsgPDUSessionAuthenticationCommand}:
+		return decoded(nasMessage.DecodePDUSessionAuthenticationCommand(data))
+	case [2]uint8{nasType.EPD5GSM, nasType.MsgPDUSessionAuthenticationComplete}:
+		return decoded(nasMessage.DecodePDUSessionAuthenticationComplete(data))
+	case [2]uint8{nasType.EPD5GSM, nasType.MsgPDUSessionAuthenticationResult}:
+		return decoded(nasMessage.DecodePDUSessionAuthenticationResult(data))
+	case [2]uint8{nasType.EPD5GSM, nasType.MsgPDUSessionModificationRequest}:
+		return decoded(nasMessage.DecodePDUSessionModificationRequest(data))
+	case [2]uint8{nasType.EPD5GSM, nasType.MsgPDUSessionModificationReject}:
+		return decoded(nasMessage.DecodePDUSessionModificationReject(data))
+	case [2]uint8{nasType.EPD5GSM, nasType.MsgPDUSessionModificationCommand}:
+		return decoded(nasMessage.DecodePDUSessionModificationCommand(data))
+	case [2]uint8{nasType.EPD5GSM, nasType.MsgPDUSessionModificationComplete}:
+		return decoded(nasMessage.DecodePDUSessionModificationComplete(data))
+	case [2]uint8{nasType.EPD5GSM, nasType.MsgPDUSessionModificationCommandReject}:
+		return decoded(nasMessage.DecodePDUSessionModificationCommandReject(data))
 	default:
 		return nil, fmt.Errorf("unsupported NAS message: EPD=0x%02x type=0x%02x", h.ExtendedProtocolDiscriminator, h.MessageType)
 	}
+}
+
+// decoded returns a decoded message, or a nil interface on error.
+func decoded[T any](m *T, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }

@@ -89,6 +89,7 @@ type UE struct {
 	pendingModify []uint8                 // sessions of the last PDUSessionResourceModifyRequest
 	sourceAMF     int64                   // AMF-UE-NGAP-ID at the handover source (PathSwitchRequest)
 	hasSourceAMF  bool
+	nssaaSNSSAI   []byte // S-NSSAI of the last Network Slice-Specific Authentication Command
 }
 
 // PDU sessions.
@@ -98,6 +99,8 @@ type pdu struct {
 	id     uint8
 	pti    uint8 // PTI of the procedure the UE started last
 	relPTI uint8 // PTI of the last PDU Session Release Command
+	modPTI uint8 // PTI of the last PDU Session Modification Command
+	auPTI  uint8 // PTI of the last PDU Session Authentication Command
 	ueIP   netip.Addr
 	upf    netip.Addr
 	ulTEID uint32

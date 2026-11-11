@@ -268,6 +268,7 @@ var {
 | `$state` | the current state of the subscriber |
 | `$msg` | the last trigger received (`NGAP:NAS`) |
 | `$time` | the current time |
+| `$ngap.Name` / `$nas.Name` | an IE of the last signal received ([5.8](#58-ies-of-the-received-signal-nas--ngap)) |
 
 When a command or a condition fails at run time, an error event is given, that statement is skipped and the next one runs.
 
@@ -289,6 +290,47 @@ A duration variable is a timer.
 - `control(0)` means no limit. n can be a variable or an expression (`control(rate)`, changed with `set(rate = 20)`).
 - While it waits, the subscriber's received messages wait too: put it at the head of a procedure.
 - linkdown cuts the wait short, and the rest of that body does not run.
+
+### 5.8 IEs of the received signal ($nas / $ngap)
+
+`$ngap.Name` and `$nas.Name` put the value of an IE of the last signal received into an expression: branch on what the core returned, or keep it in a variable.
+
+```
+receive(DownlinkNASTransport:RegistrationReject) {
+	if ($nas.Cause == 3) {                     # 5GMM cause #3 Illegal UE
+		snap("illegal ue, T3502 = %d", $nas.T3502Value)
+	}
+}
+receive(UEContextReleaseCommand) {
+	if ($ngap.Cause == "Nas" && $ngap.Cause.Nas == "deregister") {
+		move(start)
+	}
+}
+receive(PDUSessionResourceSetupRequest:PDUSessionEstablishmentAccept) {
+	set(upf = $ngap.TransportLayerAddress)   # the UPF address ("10.10.30.40", ...)
+	set(qfi = $ngap.QosFlowIdentifier)
+}
+```
+
+- The names are those of the IEs in the signal editor of the web console (Signals). Case does not matter.
+- A name after `.` is looked for inside the IE before it. The first name is looked for in the whole signal (its own IEs first, then deeper). The names in between can be left out, so `$ngap.TransportLayerAddress` names a deep IE directly. When several IEs have the name, the first one found is taken.
+- `[index]` (from 0) picks a list item: `$ngap.PDUSessionResourceSetupListSUReq[1].PDUSessionID`.
+- `$ngap` also looks inside the transfers of PDU sessions (PDUSessionResourceSetupRequestTransfer, ...).
+- `$nas` reads the NAS messages of the signal in plain. When a UL/DL NAS Transport carries a 5GSM message, that 5GSM message is looked in first, then the IEs of the transport.
+- The values:
+
+| IE | value |
+|---|---|
+| an integer | int |
+| an NGAP ENUMERATED | its name as a string (`"deregister"`, ...; the name in Signals) |
+| a CHOICE | the name of the alternative it took (`$ngap.Cause` → `"RadioNetwork"`, ...); the value inside is `$ngap.Cause.RadioNetwork` |
+| octets | hex as a string (a PLMN is `"02f839"`, a TEID `"00001001"`) |
+| a TransportLayerAddress | the IP address as a string |
+| another BIT STRING | an int up to 63 bits, longer ones hex as a string |
+
+- A group of IEs (a GUAMI, ...) or a list itself has no value: name an IE inside it, or an item with `[index]`.
+- An IE the signal does not have (an optional IE that is absent, an alternative of a CHOICE not taken, an index past the end) has no value: comparisons such as `==` and `<` are false whatever the other side (only `!=` is true), and arithmetic or `set` with it is an error at run time. snap shows it as `<nil>`.
+- It is the last signal that subscriber (the node, in a `node` handler) received. In an `entry` or an `expire`, it is the last one received by then. Commands of the CUI/GUI cannot use it.
 
 ## 6. Commands
 
@@ -387,16 +429,16 @@ When a signal is sent, the dynamic fields of the template are fixed from the con
 | `nci` | the NR cell identity (ULI, Cell Traffic Trace) |
 | `gnodebid` | the gNB ID |
 | `ranname` | RANNodeName (`gnodeb.name`) |
-| `snssai` | S-NSSAIs (slices of NG Setup, Requested NSSAI, ULNASTransport) |
+| `snssai` | S-NSSAIs (slices of NG Setup, Requested NSSAI, ULNASTransport; NSSAA Complete takes the S-NSSAI of the command received) |
 | `timestamp` | the TimeStamp of the ULI (the time of sending) |
 | `ngapid` | RAN-UE-NGAP-ID and AMF-UE-NGAP-ID (also the source AMF ID of Path Switch and the lists of NG Reset) |
 | `identity` | SUCI, 5G-GUTI, 5G-S-TMSI, and Identity Response (the type asked for: SUCI, 5G-GUTI, IMEI, 5G-S-TMSI, IMEISV) |
-| `ngksi` | ngKSI |
+| `ngksi` | ngKSI (Registration, Service, Control Plane Service and De-registration Request) |
 | `res` | RES* of Authentication Response, the AUTS of Authentication Failure (synch failure) |
 | `seccap` | UE security capability (also in Path Switch Request) |
 | `imeisv` | the IMEISV of Security Mode Complete |
-| `session` | PDU session ID, type, DNN and PTI (ULNASTransport and 5GSM) |
-| `status` | PDU session status, uplink data status, allowed PDU session status |
+| `session` | PDU session ID, type, DNN and PTI (ULNASTransport and 5GSM; a request gets a new PTI, Release Complete, Modification Complete, Modification Command Reject and PDU Session Authentication Complete the PTI of the command received) |
+| `status` | PDU session status, uplink data status, allowed PDU session status (Registration, Service and Control Plane Service Request, Notification Response) |
 | `tunnel` | the PDU session lists of NGAP (answers of setup, release, modify, notify, handover and path switch: DL TEID and address, QoS flows) |
 | `container` | the NAS message container (rebuilt and ciphered) |
 
@@ -410,6 +452,20 @@ gnodeb> mapon                                    # every item back on
 - Without an item, every item. With every item off, the octets sent are the template's (but the NAS protection).
 - In a scenario, they apply to the subject of the block (the node in `node`, else that subscriber).
 - They stay as set across linkdown.
+
+From the NAS received, the subscriber takes the following (before the handler runs).
+
+| NAS received | What is taken |
+|---|---|
+| Authentication Request | RES* and the keys (AUTN checked); the SQN for a synch failure |
+| Security Mode Command | NAS protection starts; whether the IMEISV is asked for |
+| Registration Accept / Configuration Update Command | the 5G-GUTI (paging is matched with it too); for Configuration Update Command, whether an acknowledgement or a registration is asked for is shown |
+| Identity Request | the type of identity asked for (put into Identity Response) |
+| Network Slice-Specific Authentication Command | the S-NSSAI (put into the complete) |
+| PDU Session Establishment Accept / Reject | the UE's IP address and the session; a reject removes a session that never came up |
+| PDU Session Release / Modification / Authentication Command | the PTI (put into the complete or command reject) |
+| Deregistration Accept / Deregistration Request (from the network) / Registration Reject | de-registered; the PDU sessions are released locally |
+| Authentication Reject, Service Reject (#3, #6, #7, #9) | besides, the 5G-GUTI and the NAS security context are deleted (Service Reject #10 only de-registers) |
 
 ## 11. Communication between pseudo-calls (sync_send / sync_receive)
 

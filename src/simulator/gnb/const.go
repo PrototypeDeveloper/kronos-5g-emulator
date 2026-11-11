@@ -26,8 +26,21 @@ const (
 	gutiLen            = 11   // octets of the 5GS mobile identity value of a 5G-GUTI
 	sTMSIIdentityOctet = 0xf4 // first octet of a 5G-S-TMSI mobile identity: spare bits, type 4
 	switchOffBit       = 0x08 // switch off bit of the de-registration type
+	reRegistrationBit  = 0x04 // re-registration required bit of the de-registration type (network to UE)
+	cuiACKBit          = 0x01 // configuration update indication: acknowledgement requested
+	cuiREDBit          = 0x02 // configuration update indication: registration requested
 	secCapAlg0Bit      = 0x80 // EA0 / IA0 bit of a UE security capability octet; the next algorithms follow
 	payloadN1SMInfo    = 1    // payload container type: N1 SM information
+)
+
+// 5GMM causes after which a UE deletes its 5G-GUTI and NAS security
+// context, or is de-registered (TS 24.501 §5.6.1.5: Service Reject).
+const (
+	causeIllegalUE               = 3
+	causeIllegalME               = 6
+	cause5GSNotAllowed           = 7
+	causeIdentityCannotBeDerived = 9
+	causeImplicitlyDeregistered  = 10
 )
 
 // NAS security.

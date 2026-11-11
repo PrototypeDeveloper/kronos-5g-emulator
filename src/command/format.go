@@ -51,6 +51,9 @@ func ParseFormat(f string) ([]FormatVerb, error) {
 
 // verbAccepts reports whether fmt prints a value of type t sensibly with verb.
 func verbAccepts(verb rune, t Type) bool {
+	if t == TypeAny {
+		return true // known when it runs
+	}
 	switch verb {
 	case 'v', 'T', 'x', 'X':
 		return true

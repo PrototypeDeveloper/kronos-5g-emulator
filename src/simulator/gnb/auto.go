@@ -173,6 +173,23 @@ func (r *Role) autoNAS(nas, outer, path string) (bool, string) {
 		case status:
 			return true, mapNote("the established PDU sessions", models.MapStatus)
 		}
+	case "ControlPlaneServiceRequest":
+		switch {
+		case path == "ControlPlaneServiceTypeAndNgKSI":
+			return false, mapNote("the ngKSI (high 4 bits) is replaced", models.MapNgKSI)
+		case status:
+			return true, mapNote("the established PDU sessions", models.MapStatus)
+		case under(path, "NASMessageContainer") && outer == "":
+			return true, mapNote("rebuilt from this message when sent under a security context", models.MapContainer)
+		}
+	case "NotificationResponse":
+		if status {
+			return true, mapNote("the established PDU sessions", models.MapStatus)
+		}
+	case "NetworkSliceSpecificAuthenticationComplete":
+		if under(path, "SNSSAI") {
+			return false, mapNote("the S-NSSAI of the last Network Slice-Specific Authentication Command", models.MapSNSSAI)
+		}
 	case "DeregistrationRequestUE":
 		switch {
 		case path == "DeregistrationTypeAndNgKSI":
@@ -209,12 +226,15 @@ func (r *Role) autoNAS(nas, outer, path string) (bool, string) {
 		case under(path, "DNN"):
 			return false, mapNote("replaced when ue.session gives one", models.MapSession)
 		}
-	case "PDUSessionEstablishmentRequest", "PDUSessionReleaseRequest", "PDUSessionReleaseComplete":
+	case "PDUSessionEstablishmentRequest", "PDUSessionReleaseRequest", "PDUSessionModificationRequest",
+		"PDUSessionReleaseComplete", "PDUSessionModificationComplete", "PDUSessionModificationCommandReject", "PDUSessionAuthenticationComplete":
 		switch {
 		case path == "PDUSessionID":
 			return true, mapNote("the PDU session of ue.session", models.MapSession)
+		case path == "ProcedureTransactionID" && strings.HasSuffix(nas, "Request"):
+			return true, mapNote("allocated when sent", models.MapSession)
 		case path == "ProcedureTransactionID":
-			return true, mapNote("allocated when sent (the PTI of the command for a Release Complete)", models.MapSession)
+			return true, mapNote("the PTI of the command it answers", models.MapSession)
 		case under(path, "PDUSessionType"):
 			return false, mapNote("replaced when ue.session gives a type", models.MapSession)
 		}

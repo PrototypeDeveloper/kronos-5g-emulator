@@ -126,6 +126,43 @@ func (u *UE) patchServiceRequest(t *nasMessage.ServiceRequest) error {
 	return err
 }
 
+// patchControlPlaneServiceRequest writes the ngKSI (high half octet) and
+// the session status IEs; the NAS message container repeats the whole
+// message, as for a Service Request.
+func (u *UE) patchControlPlaneServiceRequest(t *nasMessage.ControlPlaneServiceRequest) error {
+	if u.off.On(models.MapNgKSI) {
+		t.ControlPlaneServiceTypeAndNgKSI = u.ksi()<<ngKSIShift | t.ControlPlaneServiceTypeAndNgKSI&lowHalfOctet
+	}
+	if u.off.On(models.MapStatus) {
+		status := u.sessionStatus()
+		if t.HasPDUSessionStatus {
+			t.PDUSessionStatus.Value = clone(status)
+		}
+		if t.HasUplinkDataStatus {
+			t.UplinkDataStatus.Value = clone(status)
+		}
+	}
+	if !t.HasNASMessageContainer || !u.off.On(models.MapContainer) {
+		return nil
+	}
+	if u.sec == nil {
+		t.HasNASMessageContainer = false // only sent under a security context
+		return nil
+	}
+	inner, err := libnas.Decode(t.NASMessageContainer.Value, nil)
+	if err != nil {
+		return err
+	}
+	if in, ok := inner.(*nasMessage.ControlPlaneServiceRequest); ok {
+		in.HasNASMessageContainer = false
+		if err := u.patchControlPlaneServiceRequest(in); err != nil {
+			return err
+		}
+	}
+	t.NASMessageContainer.Value, err = libnas.Encode(inner, nil)
+	return err
+}
+
 // patchDeregistration writes the ngKSI (high half octet) and the identity.
 func (u *UE) patchDeregistration(t *nasMessage.DeregistrationRequestUE) error {
 	if u.off.On(models.MapNgKSI) {
@@ -185,6 +222,10 @@ func (u *UE) cipherContainer(m any) error {
 			c = &t.NASMessageContainer
 		}
 	case *nasMessage.RegistrationRequest:
+		if t.HasNASMessageContainer {
+			c = &t.NASMessageContainer.Value
+		}
+	case *nasMessage.ControlPlaneServiceRequest:
 		if t.HasNASMessageContainer {
 			c = &t.NASMessageContainer.Value
 		}

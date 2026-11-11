@@ -22,6 +22,8 @@ func (t Type) String() string {
 		return "duration"
 	case TypeBool:
 		return "bool"
+	case TypeAny:
+		return "IE value"
 	default:
 		return "none"
 	}

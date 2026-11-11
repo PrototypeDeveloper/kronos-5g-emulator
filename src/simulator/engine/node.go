@@ -140,6 +140,7 @@ func (n *node) receive(m rxMsg) {
 	}
 	// A non-UE PDU: publish it, update the node status through the role and run its handler.
 	n.lastMsg = info.Name
+	n.rx = newReceived(msg, nil)
 	h := n.e.nodeHandlers[info.Name]
 	ev.Handler = "unhandled"
 	if h != nil {

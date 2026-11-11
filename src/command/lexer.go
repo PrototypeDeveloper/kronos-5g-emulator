@@ -45,6 +45,8 @@ var tokenNames = [...]string{
 	TokAnd:      "&&",
 	TokOr:       "||",
 	TokNot:      "!",
+	TokLBracket: "[",
+	TokRBracket: "]",
 	TokIllegal:  "invalid token",
 }
 
@@ -151,7 +153,7 @@ var punct = map[rune]TokenKind{
 	'(': TokLParen, ')': TokRParen, '{': TokLBrace, '}': TokRBrace,
 	',': TokComma, '.': TokDot, ':': TokColon, '=': TokAssign, '*': TokStar,
 	'+': TokPlus, '-': TokMinus, '/': TokSlash, '%': TokPercent,
-	'<': TokLt, '>': TokGt, '!': TokNot,
+	'<': TokLt, '>': TokGt, '!': TokNot, '[': TokLBracket, ']': TokRBracket,
 }
 
 // punct2 maps the two-character operators to their kinds.

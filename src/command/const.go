@@ -48,6 +48,7 @@ const (
 	TypeString
 	TypeDuration
 	TypeBool // the result of a comparison; variables cannot have it
+	TypeAny  // an IE of a received message ($nas.X, $ngap.X): its type shows when it runs
 )
 
 // Token kinds.
@@ -72,15 +73,17 @@ const (
 	TokMinus
 	TokSlash
 	TokPercent
-	TokEq      // ==
-	TokNe      // !=
-	TokLt      // <
-	TokLe      // <=
-	TokGt      // >
-	TokGe      // >=
-	TokAnd     // &&
-	TokOr      // ||
-	TokNot     // !
+	TokEq  // ==
+	TokNe  // !=
+	TokLt  // <
+	TokLe  // <=
+	TokGt  // >
+	TokGe  // >=
+	TokAnd // &&
+	TokOr  // ||
+	TokNot // !
+	TokLBracket
+	TokRBracket
 	TokIllegal // Text holds the error message
 )
 
@@ -93,6 +96,13 @@ const (
 	ExprUnary                   // Op X: -a, !(a == 1)
 	ExprBinary                  // X Op Y: a + 5, a == 1, a > 0 && b < 3
 	ExprAssign                  // Name = Y (only the argument of set)
+	ExprField                   // an IE of the received message: $nas.Cause, $ngap.Cause.Nas (Name is nas or ngap)
+)
+
+// The builtins that name an IE of the received message.
+const (
+	FieldNAS  = "nas"
+	FieldNGAP = "ngap"
 )
 
 // Precedence of the binary operators, as in C: a higher one binds tighter.

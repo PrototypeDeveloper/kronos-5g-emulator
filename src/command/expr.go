@@ -18,6 +18,10 @@ func isNum(t Type) bool { return t == TypeInt || t == TypeFloat }
 // unaryType returns the type of op x.
 func unaryType(op string, x Type) (Type, error) {
 	switch {
+	case x == TypeAny && op == "!":
+		return TypeBool, nil
+	case x == TypeAny:
+		return TypeAny, nil
 	case op == "-" && (isNum(x) || x == TypeDuration):
 		return x, nil
 	case op == "!" && x == TypeBool:
@@ -31,6 +35,9 @@ func unaryType(op string, x Type) (Type, error) {
 // binaryType returns the type of x op y. Mixing int and float gives a float;
 // + with a string joins the text of both sides.
 func binaryType(op string, x, y Type) (Type, error) {
+	if x == TypeAny || y == TypeAny {
+		return anyType(op, x, y)
+	}
 	switch op {
 	case "&&", "||":
 		if x == TypeBool && y == TypeBool {
@@ -76,8 +83,40 @@ func arithType(op string, x, y Type) Type {
 	return TypeNone
 }
 
-// assignable reports whether a value of type from can be stored in a variable of type to.
-func assignable(from, to Type) bool { return from == to || from == TypeInt && to == TypeFloat }
+// anyType is binaryType with an IE value on a side, whose type shows when
+// it runs: a comparison is a bool, + with a string a string, the rest an IE value.
+func anyType(op string, x, y Type) (Type, error) {
+	other := x
+	if x == TypeAny {
+		other = y
+	}
+	switch op {
+	case "&&", "||":
+		if other == TypeBool || other == TypeAny {
+			return TypeBool, nil
+		}
+		return TypeNone, fmt.Errorf("%s joins comparisons such as a == 1 (found %s and %s)", op, x, y)
+	case "==", "!=", "<", "<=", ">", ">=":
+		return TypeBool, nil
+	case "+":
+		if other == TypeString {
+			return TypeString, nil
+		}
+	}
+	if other == TypeBool || other == TypeString {
+		return TypeNone, fmt.Errorf("%s cannot be applied to %s and %s", op, x, y)
+	}
+	return TypeAny, nil
+}
+
+// assignable reports whether a value of type from can be stored in a
+// variable of type to (an IE value is checked when it runs).
+func assignable(from, to Type) bool {
+	return from == to || from == TypeInt && to == TypeFloat || from == TypeAny
+}
+
+// errNoIE is the error of an IE that the received message does not have.
+var errNoIE = errors.New("the received message has no such IE")
 
 // Convert returns v as a value of the variable type to (an int becomes a float).
 func Convert(v Value, to Type) (Value, error) {
@@ -86,6 +125,8 @@ func Convert(v Value, to Type) (Value, error) {
 		return v, nil
 	case v.Type == TypeInt && to == TypeFloat:
 		return FloatVal(float64(v.Int)), nil
+	case v.Type == TypeNone:
+		return Value{}, errNoIE
 	}
 	return Value{}, fmt.Errorf("%s cannot be stored in a variable of type %s", v.Type, to)
 }
@@ -108,9 +149,21 @@ func checkExpr(e Expr, r Resolver, subject Scope, ds *diag.List) Type {
 			ds.Errorf(e.Pos, "private variable %s cannot be used here (it belongs to each subscriber)", e.Name)
 		}
 		return vi.Type
+	case ExprField:
+		switch {
+		case e.Name != FieldNAS && e.Name != FieldNGAP:
+			ds.Errorf(e.Pos, "$%s has no IEs: only $nas and $ngap name an IE of the received message", e.Name)
+			return TypeNone
+		case subject == ScopeConsole:
+			ds.Errorf(e.Pos, "$%s cannot be used here (it reads the message a subscriber or the node received)", e.Name)
+		}
+		return TypeAny
 	case ExprBuiltin:
 		bi, ok := LookupBuiltin(e.Name)
 		switch {
+		case !ok && (e.Name == FieldNAS || e.Name == FieldNGAP):
+			ds.Errorf(e.Pos, "$%s needs the name of an IE, e.g. $%s.Cause", e.Name, e.Name)
+			return TypeNone
 		case !ok:
 			ds.Errorf(e.Pos, "unknown builtin $%s%s", e.Name, hint(e.Name, builtinNames()))
 			return TypeNone
@@ -174,6 +227,8 @@ func EvalExpr(env Env, e Expr) (Value, error) {
 		return env.Var(e.Name)
 	case ExprBuiltin:
 		return env.Builtin(e.Name)
+	case ExprField:
+		return env.Field(e.Name, e.Path)
 	case ExprParen:
 		return EvalExpr(env, *e.X)
 	case ExprUnary:
@@ -213,6 +268,9 @@ func EvalCond(env Env, e Expr) (bool, error) {
 
 // applyUnary computes op x.
 func applyUnary(op string, x Value) (Value, error) {
+	if x.Type == TypeNone {
+		return Value{}, errNoIE
+	}
 	if _, err := unaryType(op, x.Type); err != nil {
 		return Value{}, err
 	}
@@ -241,6 +299,18 @@ func asFloat(v Value) float64 {
 // applyBinary computes x op y (not && and ||, which EvalExpr short-circuits,
 // except when both sides are given).
 func applyBinary(op string, x, y Value) (Value, error) {
+	// An IE the message does not have equals nothing.
+	if x.Type == TypeNone || y.Type == TypeNone {
+		switch op {
+		case "==":
+			return BoolVal(false), nil
+		case "!=":
+			return BoolVal(true), nil
+		case "<", "<=", ">", ">=":
+			return BoolVal(false), nil
+		}
+		return Value{}, errNoIE
+	}
 	t, err := binaryType(op, x.Type, y.Type)
 	if err != nil {
 		return Value{}, err

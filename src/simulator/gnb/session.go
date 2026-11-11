@@ -112,6 +112,23 @@ func (u *UE) patchULNASTransport(t *nasMessage.ULNASTransport) error {
 		if on {
 			m.PDUSessionID, m.ProcedureTransactionID = id, u.session(id).relPTI
 		}
+	case *nasMessage.PDUSessionModificationRequest:
+		if on {
+			m.PDUSessionID, m.ProcedureTransactionID = id, u.allocPTI()
+		}
+		u.session(m.PDUSessionID).pti = m.ProcedureTransactionID
+	case *nasMessage.PDUSessionModificationComplete:
+		if on {
+			m.PDUSessionID, m.ProcedureTransactionID = id, u.session(id).modPTI
+		}
+	case *nasMessage.PDUSessionModificationCommandReject:
+		if on {
+			m.PDUSessionID, m.ProcedureTransactionID = id, u.session(id).modPTI
+		}
+	case *nasMessage.PDUSessionAuthenticationComplete:
+		if on {
+			m.PDUSessionID, m.ProcedureTransactionID = id, u.session(id).auPTI
+		}
 	case *nasMessage.Status5GSM:
 		if on {
 			m.PDUSessionID = id // the PTI stays: it names the message the status is about

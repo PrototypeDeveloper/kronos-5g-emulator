@@ -39,7 +39,7 @@ var pDUSessionEstablishmentAcceptOptions = nascodec.Schema{
 	nasType.IEQoSFlowDescriptions:                  {Format: nascodec.TLVE, Min: 3, Max: 65535},
 	nasType.IECause5GSM:                            {Format: nascodec.TV, Min: 1, Max: 1},
 	nasType.IEPDUAddress:                           {Format: nascodec.TLV, Min: 5, Max: 29},
-	nasType.IERQTimerValue:                         {Format: nascodec.TLV, Min: 1, Max: 1},
+	nasType.IERQTimerValue:                         {Format: nascodec.TV, Min: 1, Max: 1},
 	nasType.IESNSSAI:                               {Format: nascodec.TLV, Min: 1, Max: 8},
 	nasType.IEAlwaysOnPDUSessionIndication:         {Format: nascodec.HalfTV, Min: 1, Max: 1},
 	nasType.IEMappedEPSBearerContexts:              {Format: nascodec.TLVE, Min: 4, Max: 65535},

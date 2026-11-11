@@ -101,6 +101,36 @@ func (w *Writer) Options(options []nasType.IE, schema Schema) {
 		}
 	}
 }
+
+// UnknownOptions writes back IEs that schema does not model (as decoded by
+// Reader.OptionsWithUnknown), in the format unknownFormat gives their IEI.
+func (w *Writer) UnknownOptions(options []nasType.IE, schema Schema) {
+	for _, ie := range options {
+		if _, ok := schema[ie.ID]; ok {
+			w.fail(fmt.Errorf("IE 0x%02x is a modelled IE, not an unknown one", ie.ID))
+			return
+		}
+		format, err := unknownFormat(ie.ID)
+		if err != nil {
+			w.fail(err)
+			return
+		}
+		switch format {
+		case HalfTV:
+			if ie.ID&15 != 0 || len(ie.Value) != 1 || ie.Value[0] > 15 {
+				w.fail(fmt.Errorf("invalid half-octet IE 0x%02x", ie.ID))
+				return
+			}
+			w.Data = append(w.Data, ie.ID|ie.Value[0])
+		case TLV:
+			w.Data = append(w.Data, ie.ID)
+			w.LV(ie.Value, 1, 0, 255)
+		case TLVE:
+			w.Data = append(w.Data, ie.ID)
+			w.LV(ie.Value, 2, 0, 65535)
+		}
+	}
+}
 func (w *Writer) Result() ([]byte, error) {
 	if w.Err != nil {
 		return nil, w.Err
@@ -154,7 +184,17 @@ func (r *Reader) LV(width, min, max int) []byte {
 	return r.Take(n)
 }
 func (r *Reader) Options(schema Schema) []nasType.IE {
-	var out []nasType.IE
+	known, _ := r.options(schema, false)
+	return known
+}
+
+// OptionsWithUnknown reads optional IEs like Options and also returns the
+// IEs the schema does not model, which Options skips.
+func (r *Reader) OptionsWithUnknown(schema Schema) (known, unknown []nasType.IE) {
+	return r.options(schema, true)
+}
+
+func (r *Reader) options(schema Schema, keepUnknown bool) (out, unknown []nasType.IE) {
 	seen := map[uint8]bool{}
 	for len(r.Data) > 0 && r.Err == nil {
 		first := r.U8(255)
@@ -164,19 +204,29 @@ func (r *Reader) Options(schema Schema) []nasType.IE {
 		}
 		rule, ok := schema[id]
 		if !ok {
-			// TS 24.007 11.2.4/11.2.5 (5GS): unknown type 1/2 is
-			// one octet; 0x60..0x7f is TLV-E; other full IEIs are TLV.
-			// 0x00..0x0f and 0x7e/0x7f require comprehension.
-			if first < 0x10 || first == 0x7e || first == 0x7f {
-				r.Err = fmt.Errorf("unknown comprehension-required IE 0x%02x", first)
+			format, err := unknownFormat(first)
+			if err != nil {
+				r.Err = err
 				break
 			}
-			if first < 0x80 {
+			switch {
+			case format == HalfTV:
+				if keepUnknown {
+					unknown = append(unknown, nasType.IE{ID: id, Value: []byte{first & 15}})
+				}
+			case keepUnknown:
 				width := 1
-				if first >= 0x60 {
+				if format == TLVE {
 					width = 2
 				}
-				r.skipLV(width)
+				value := r.LV(width, 0, 65535)
+				if r.Err == nil {
+					unknown = append(unknown, nasType.IE{ID: first, Value: value})
+				}
+			case format == TLVE:
+				r.skipLV(2)
+			default:
+				r.skipLV(1)
 			}
 			continue
 		}
@@ -208,7 +258,23 @@ func (r *Reader) Options(schema Schema) []nasType.IE {
 		}
 		out = append(out, nasType.IE{ID: id, Value: value})
 	}
-	return out
+	return out, unknown
+}
+
+// unknownFormat gives the format of an IE the schema does not know.
+// TS 24.007 11.2.4/11.2.5 (5GS): unknown type 1/2 is one octet;
+// 0x70..0x7f is TLV-E; other full IEIs (0x6X too) are TLV.
+// 0x00..0x0f and 0x7e/0x7f require comprehension.
+func unknownFormat(iei uint8) (Format, error) {
+	switch {
+	case iei < 0x10 || iei == 0x7e || iei == 0x7f:
+		return 0, fmt.Errorf("unknown comprehension-required IE 0x%02x", iei)
+	case iei >= 0x80:
+		return HalfTV, nil
+	case iei >= 0x70:
+		return TLVE, nil
+	}
+	return TLV, nil
 }
 
 func (r *Reader) skipLV(width int) {

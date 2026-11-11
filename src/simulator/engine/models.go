@@ -122,8 +122,9 @@ type node struct {
 	done        chan struct{}
 	lastMsg     string
 	subsStarted bool
-	outStreams  uint16 // fixed for the association; read by subscriber actors
-	timers      timers // the node's scenario timers (public variables)
+	outStreams  uint16   // fixed for the association; read by subscriber actors
+	timers      timers   // the node's scenario timers (public variables)
+	rx          received // the last received message ($ngap)
 
 	mu     sync.Mutex // guards status for snapshots taken by other goroutines
 	status models.NodeStatus
@@ -183,6 +184,7 @@ type subscriber struct {
 	state   string
 	vars    map[string]command.Value
 	mapOff  atomic.Uint32 // models.MapOff: the mapping items off for this subscriber (kept across linkdown)
+	rx      received      // the last received message ($ngap, $nas)
 	lastMsg string
 	moved   string                  // the last move() target, whose entry runs after the handler
 	tunnels map[uint8]models.Tunnel // active PDU session tunnels by session ID
@@ -267,4 +269,13 @@ type timerMsg struct {
 type timers struct {
 	runs map[string]*timerRun
 	gen  uint64
+}
+
+// received is the message that started the handler (or came last), which
+// $ngap.X and $nas.X read; its NAS messages are decoded on first use.
+type received struct {
+	ngap    any      // the decoded NGAP message
+	plain   [][]byte // the plain text of its NAS-PDUs that were protected (nil: as sent)
+	decoded []any    // its NAS messages, once decoded
+	done    bool     // decoded is set
 }

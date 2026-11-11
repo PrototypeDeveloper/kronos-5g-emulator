@@ -19,7 +19,8 @@ func TestNASOptionalIECompatibility(t *testing.T) {
 		}
 		// These IEIs are unknown in all three messages; their values must not
 		// be interpreted as subsequent IEs or alter known mandatory fields.
-		for _, extra := range [][]byte{{0xe1}, {0x41, 2, 0x7f, 0xff}, {0x60, 0, 2, 0x7f, 0xff}} {
+		// 0x6X is TLV and 0x7X is TLV-E (TS 24.007 11.2.4).
+		for _, extra := range [][]byte{{0xe1}, {0x41, 2, 0x7f, 0xff}, {0x6a, 2, 0x7f, 0xff}, {0x7d, 0, 2, 0x7f, 0xff}} {
 			input := append(append([]byte(nil), wire...), extra...)
 			v, err := libnas.Decode(input, nil)
 			if err != nil {

@@ -268,6 +268,7 @@ var {
 | `$state` | 加入者のいまの状態 |
 | `$msg` | 最後に受けたトリガ（`NGAP:NAS`） |
 | `$time` | 現在時刻 |
+| `$ngap.名前` / `$nas.名前` | 最後に受けた信号の IE（[5.8](#58-受けた信号の-ie-を読むnas--ngap)） |
 
 実行時にコマンドや条件が失敗すると、エラーのイベントを出してその文だけをやめ、次の文に進みます。
 
@@ -289,6 +290,47 @@ duration 型の変数がタイマーになります。
 - `control(0)` は制限なしです。n には変数や式も書けます（`control(rate)` にして、`set(rate = 20)` で負荷を変える）。
 - 待つ間は、その加入者の受信の処理も待つので、手順の頭に置いてください。
 - linkdown で待ちは打ち切られ、その本体の残りは実行しません。
+
+### 5.8 受けた信号の IE を読む（$nas / $ngap）
+
+`$ngap.名前` と `$nas.名前` で、最後に受けた信号の IE の値を式に使えます。Core が返した値で分岐したり、変数に取っておいたりできます。
+
+```
+receive(DownlinkNASTransport:RegistrationReject) {
+	if ($nas.Cause == 3) {                     # 5GMM cause #3 Illegal UE
+		snap("illegal ue, T3502 = %d", $nas.T3502Value)
+	}
+}
+receive(UEContextReleaseCommand) {
+	if ($ngap.Cause == "Nas" && $ngap.Cause.Nas == "deregister") {
+		move(start)
+	}
+}
+receive(PDUSessionResourceSetupRequest:PDUSessionEstablishmentAccept) {
+	set(upf = $ngap.TransportLayerAddress)   # UPF のアドレス（"10.10.30.40" など）
+	set(qfi = $ngap.QosFlowIdentifier)
+}
+```
+
+- 名前は、Web コンソールの信号の編集（Signals）に出る IE の名前です。大文字と小文字は区別しません。
+- `.` でつなぐと、前の IE の中から探します。最初の名前は信号全体から探します（直下の IE を先に、無ければ奥へ）。途中は省けるので、`$ngap.TransportLayerAddress` のように奥の IE を直接書けます。同じ名前が複数あるときは最初に見つかったものです。
+- リストの項目は `[番号]`（0 から）で選びます（`$ngap.PDUSessionResourceSetupListSUReq[1].PDUSessionID`）。
+- `$ngap` は PDU Session の Transfer（PDUSessionResourceSetupRequestTransfer など）の中も探します。
+- `$nas` は信号の NAS メッセージを平文で読みます。UL/DL NAS Transport が 5GSM のメッセージを運んでいるときは、中の 5GSM メッセージを先に探し、無ければ Transport の IE を探します。
+- 値の形:
+
+| IE | 値 |
+|---|---|
+| 整数 | int |
+| NGAP の ENUMERATED | 名前の文字列（`"deregister"` など。Signals に出る名前） |
+| CHOICE | 選ばれている選択肢の名前（`$ngap.Cause` → `"RadioNetwork"` など）。中の値は `$ngap.Cause.RadioNetwork` |
+| オクテット列 | 16 進の文字列（PLMN は `"02f839"`、TEID は `"00001001"`） |
+| TransportLayerAddress | IP アドレスの文字列 |
+| そのほかの BIT STRING | 63 ビットまでは int、それより長いものは 16 進の文字列 |
+
+- 構造（GUAMI など、IE をまとめたもの）やリストそのものは値になりません。中の IE の名前か `[番号]` を書きます。
+- 信号に無い IE（入っていない任意 IE、選ばれていない CHOICE の選択肢、無い番号）は「無い」値になります。`==` `<` などの比較はどの値とも成り立たず（`!=` だけが成り立ちます）、計算や `set` に使うと実行時のエラーです。snap では `<nil>` と表示します。
+- 読むのは、その加入者（`node` のハンドラではノード）が最後に受けた信号です。`entry` や `expire` で使うと、その時点で最後に受けた信号を読みます。CUI/GUI のコマンドからは使えません。
 
 ## 6. コマンド
 
@@ -387,16 +429,16 @@ iperf3 -c 10.0.0.1 -B 10.60.0.1 -t 10 -R     # 下り
 | `nci` | NR セル ID（ULI、Cell Traffic Trace） |
 | `gnodebid` | gNB ID |
 | `ranname` | RANNodeName（`gnodeb.name`） |
-| `snssai` | S-NSSAI（NG Setup のスライス、Requested NSSAI、ULNASTransport） |
+| `snssai` | S-NSSAI（NG Setup のスライス、Requested NSSAI、ULNASTransport、NSSAA Complete は受けた Command の S-NSSAI） |
 | `timestamp` | ULI の TimeStamp（送信時刻） |
 | `ngapid` | RAN-UE-NGAP-ID と AMF-UE-NGAP-ID（Path Switch の Source AMF ID、NG Reset のリストを含む） |
 | `identity` | SUCI・5G-GUTI・5G-S-TMSI、Identity Response（求められた種類: SUCI・5G-GUTI・IMEI・5G-S-TMSI・IMEISV） |
-| `ngksi` | ngKSI |
+| `ngksi` | ngKSI（Registration・Service・Control Plane Service・De-registration Request） |
 | `res` | Authentication Response の RES*、Authentication Failure（synch failure）の AUTS |
 | `seccap` | UE Security Capability（Path Switch Request を含む） |
 | `imeisv` | Security Mode Complete の IMEISV |
-| `session` | PDU セッション ID・種別・DNN・PTI（ULNASTransport と 5GSM） |
-| `status` | PDU Session Status、Uplink Data Status、Allowed PDU Session Status |
+| `session` | PDU セッション ID・種別・DNN・PTI（ULNASTransport と 5GSM。Request は新しい PTI、Release Complete・Modification Complete・Modification Command Reject・PDU Session Authentication Complete は受けたコマンドの PTI） |
+| `status` | PDU Session Status、Uplink Data Status、Allowed PDU Session Status（Registration・Service・Control Plane Service Request、Notification Response） |
 | `tunnel` | NGAP の PDU セッションのリスト（Setup・Release・Modify・Notify・Handover・Path Switch の応答、DL の TEID とアドレス、QoS フロー） |
 | `container` | NAS message container（作り直しと暗号化） |
 
@@ -410,6 +452,20 @@ gnodeb> mapon                                    # 全項目を ON に戻す
 - 項目を省くと全項目が対象です。全項目を OFF にすると、テンプレートとバイト単位で同じものを送ります（NAS の保護は除く）。
 - シナリオでは、そのブロックの主体（`node` ならノード、それ以外はその加入者）に効きます。
 - 切り替えた状態は linkdown では戻りません。
+
+受けた NAS からは、次の情報を取り込みます（ハンドラより先に行います）。
+
+| 受けた NAS | 取り込むこと |
+|---|---|
+| Authentication Request | RES* と鍵（AUTN を検証）。Synch failure 用の SQN |
+| Security Mode Command | NAS の保護を始める。IMEISV を求められたか |
+| Registration Accept / Configuration Update Command | 5G-GUTI（Paging の照合にも使う）。Configuration Update Command は ACK を求められたか、登録を求められたかを表示 |
+| Identity Request | 求められた ID の種類（Identity Response に入れる） |
+| Network Slice-Specific Authentication Command | S-NSSAI（Complete に入れる） |
+| PDU Session Establishment Accept / Reject | UE の IP アドレスとセッション。Reject は張れなかったセッションを消す |
+| PDU Session Release / Modification / Authentication Command | PTI（Complete・Command Reject に入れる） |
+| Deregistration Accept / Deregistration Request（網から）/ Registration Reject | 未登録にし、PDU セッションをローカルで解放する |
+| Authentication Reject、Service Reject（#3・#6・#7・#9） | 加えて 5G-GUTI と NAS のセキュリティを消す（Service Reject の #10 は未登録にするだけ） |
 
 ## 11. 疑似呼間通信（sync_send / sync_receive）
 

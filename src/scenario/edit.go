@@ -91,6 +91,7 @@ func joinPath(base, seg string) string {
 // The fields that carry extensions and unknown values: shown, never edited.
 var extensionFields = map[string]bool{
 	"IEExtensions": true, "UnknownExtensions": true, "AdditionalIEs": true, "UnknownValue": true, "ChoiceExtensions": true,
+	"UnknownIEs": true, // optional NAS IEs libnas does not model, kept as received
 }
 
 var payloadContainerType = reflect.TypeOf(nasType.PayloadContainer{})

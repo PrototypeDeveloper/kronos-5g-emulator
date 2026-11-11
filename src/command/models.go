@@ -88,11 +88,19 @@ type Lexer struct {
 // Expr is one argument of a call, or a part of one.
 type Expr struct {
 	Kind ExprKind
-	Name string // ExprIdent and ExprBuiltin; the variable of ExprAssign
-	Val  Value  // ExprLiteral
-	Op   string // ExprUnary and ExprBinary: "-", "!", "+", "==", "&&" …
-	X, Y *Expr  // the operands (X of ExprParen and ExprUnary; Y, the value, of ExprAssign)
+	Name string     // ExprIdent and ExprBuiltin; the variable of ExprAssign
+	Val  Value      // ExprLiteral
+	Op   string     // ExprUnary and ExprBinary: "-", "!", "+", "==", "&&" …
+	X, Y *Expr      // the operands (X of ExprParen and ExprUnary; Y, the value, of ExprAssign)
+	Path []FieldSeg // ExprField: the IE, from the outside in
 	Pos  diag.Pos
+}
+
+// FieldSeg is one step of the path of an IE: a name, and an index into a list.
+type FieldSeg struct {
+	Name     string
+	Index    int
+	HasIndex bool
 }
 
 // Call is `name(arg, ...)`, the form shared by scenario actions and the command line.

@@ -257,8 +257,18 @@ func (u *UE) patchNAS(m any, inContainer bool) error {
 		}
 	case *nasMessage.ServiceRequest:
 		return u.patchServiceRequest(t)
+	case *nasMessage.ControlPlaneServiceRequest:
+		return u.patchControlPlaneServiceRequest(t)
 	case *nasMessage.DeregistrationRequestUE:
 		return u.patchDeregistration(t)
+	case *nasMessage.NotificationResponse:
+		if t.HasPDUSessionStatus && u.off.On(models.MapStatus) {
+			t.PDUSessionStatus.Value = u.sessionStatus()
+		}
+	case *nasMessage.NetworkSliceSpecificAuthenticationComplete:
+		if u.nssaaSNSSAI != nil && u.off.On(models.MapSNSSAI) {
+			t.SNSSAI = clone(u.nssaaSNSSAI) // the slice the command named
+		}
 	case *nasMessage.IdentityResponse:
 		if u.off.On(models.MapIdentity) {
 			return u.patchIdentityResponse(t)
@@ -458,6 +468,26 @@ func (u *UE) receiveNAS(b []byte, in *models.Inbound) {
 	case *nasMessage.IdentityRequest:
 		u.identityType = t.IdentityType & identityTypeMask
 		in.Notes = append(in.Notes, fmt.Sprintf("Identity Request: identity type %d", u.identityType))
+	case *nasMessage.ConfigurationUpdateCommand:
+		u.configurationUpdate(t, in)
+	case *nasMessage.DeregistrationRequestNW:
+		note := "de-registered by the network (DeregistrationRequestNW"
+		if t.HasCause5GMM {
+			note += fmt.Sprintf(", 5GMM cause %d", t.Cause5GMM.Value)
+		}
+		if t.DeregistrationType&reRegistrationBit != 0 {
+			note += ", re-registration required"
+		}
+		in.Notes = append(in.Notes, note+")")
+	case *nasMessage.ServiceReject:
+		u.serviceReject(t, in)
+	case *nasMessage.NetworkSliceSpecificAuthenticationCommand:
+		u.nssaaSNSSAI = clone(t.SNSSAI)
+		in.Notes = append(in.Notes, fmt.Sprintf("Network Slice-Specific Authentication Command: S-NSSAI %x", t.SNSSAI))
+	case *nasMessage.NetworkSliceSpecificAuthenticationResult:
+		in.Notes = append(in.Notes, fmt.Sprintf("Network Slice-Specific Authentication Result: S-NSSAI %x", t.SNSSAI))
+	case *nasMessage.Notification:
+		in.Notes = append(in.Notes, fmt.Sprintf("Notification (access type %d)", t.AccessType&lowHalfOctet))
 	case *nasMessage.DLNASTransport:
 		if c := t.PayloadContainer; t.PayloadContainerType == payloadN1SMInfo && len(c) >= 4 {
 			if inner, ok := scenario.NASByType(c[0], c[3]); ok {
@@ -591,5 +621,50 @@ func (u *UE) receive5GSM(b []byte, in *models.Inbound) {
 	case *nasMessage.PDUSessionReleaseCommand:
 		u.session(t.PDUSessionID).relPTI = t.ProcedureTransactionID
 		in.Notes = append(in.Notes, fmt.Sprintf("PDU session %d release commanded (cause %d)", t.PDUSessionID, t.Cause))
+	case *nasMessage.PDUSessionModificationCommand:
+		u.session(t.PDUSessionID).modPTI = t.ProcedureTransactionID
+		in.Notes = append(in.Notes, fmt.Sprintf("PDU session %d modification commanded (PTI %d)", t.PDUSessionID, t.ProcedureTransactionID))
+	case *nasMessage.PDUSessionModificationReject:
+		in.Notes = append(in.Notes, fmt.Sprintf("PDU session %d modification rejected (cause %d)", t.PDUSessionID, t.Cause))
+	case *nasMessage.PDUSessionAuthenticationCommand:
+		u.session(t.PDUSessionID).auPTI = t.ProcedureTransactionID
+		in.Notes = append(in.Notes, fmt.Sprintf("PDU session %d authentication commanded (PTI %d)", t.PDUSessionID, t.ProcedureTransactionID))
+	}
+}
+
+// configurationUpdate takes the new 5G-GUTI of a Configuration Update
+// Command (the 5G-S-TMSI that paging names follows it) and notes what the
+// network asks for.
+func (u *UE) configurationUpdate(t *nasMessage.ConfigurationUpdateCommand, in *models.Inbound) {
+	note := "Configuration Update Command"
+	if t.HasGUTI5GS {
+		u.guti = clone(t.GUTI5GS.Value)
+		in.PagingKey = u.pagingKey()
+		note += fmt.Sprintf(": 5G-GUTI %x", u.guti)
+	}
+	if t.HasConfigurationUpdateIndication {
+		if t.ConfigurationUpdateIndication.Value&cuiACKBit != 0 {
+			note += " (acknowledgement requested: ConfigurationUpdateComplete)"
+		}
+		if t.ConfigurationUpdateIndication.Value&cuiREDBit != 0 {
+			note += " (registration requested)"
+		}
+	}
+	in.Notes = append(in.Notes, note)
+}
+
+// serviceReject follows the 5GMM cause of a Service Reject (TS 24.501
+// §5.6.1.5): after #3, #6, #7 and #9 the UE deletes its 5G-GUTI and NAS
+// security context; after those and #10 it is de-registered and its PDU
+// sessions are released locally.
+func (u *UE) serviceReject(t *nasMessage.ServiceReject, in *models.Inbound) {
+	in.Notes = append(in.Notes, fmt.Sprintf("service rejected (ServiceReject, 5GMM cause %d)", t.Cause))
+	switch t.Cause {
+	case causeIllegalUE, causeIllegalME, cause5GSNotAllowed, causeIdentityCannotBeDerived:
+		u.sec, u.guti, u.ngKSI = nil, nil, noKey
+		in.Notes = append(in.Notes, "the 5G-GUTI and the NAS security context are deleted")
+		u.deregister(in)
+	case causeImplicitlyDeregistered:
+		u.deregister(in)
 	}
 }

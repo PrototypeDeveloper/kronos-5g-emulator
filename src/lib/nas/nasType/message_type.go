@@ -30,4 +30,25 @@ const (
 	MsgPDUSessionEstablishmentAccept  uint8 = 0xc2
 	MsgPDUSessionEstablishmentReject  uint8 = 0xc3
 	MsgStatus5GSM                     uint8 = 0xd6
+
+	MsgDeregistrationRequestNW                    uint8 = 0x47
+	MsgDeregistrationAcceptNW                     uint8 = 0x48
+	MsgServiceReject                              uint8 = 0x4d
+	MsgControlPlaneServiceRequest                 uint8 = 0x4f
+	MsgNetworkSliceSpecificAuthenticationCommand  uint8 = 0x50
+	MsgNetworkSliceSpecificAuthenticationComplete uint8 = 0x51
+	MsgNetworkSliceSpecificAuthenticationResult   uint8 = 0x52
+	MsgConfigurationUpdateCommand                 uint8 = 0x54
+	MsgConfigurationUpdateComplete                uint8 = 0x55
+	MsgAuthenticationResult                       uint8 = 0x5a
+	MsgNotification                               uint8 = 0x65
+	MsgNotificationResponse                       uint8 = 0x66
+	MsgPDUSessionAuthenticationCommand            uint8 = 0xc5
+	MsgPDUSessionAuthenticationComplete           uint8 = 0xc6
+	MsgPDUSessionAuthenticationResult             uint8 = 0xc7
+	MsgPDUSessionModificationRequest              uint8 = 0xc9
+	MsgPDUSessionModificationReject               uint8 = 0xca
+	MsgPDUSessionModificationCommand              uint8 = 0xcb
+	MsgPDUSessionModificationComplete             uint8 = 0xcc
+	MsgPDUSessionModificationCommandReject        uint8 = 0xcd
 )

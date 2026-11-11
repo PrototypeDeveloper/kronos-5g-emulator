@@ -104,7 +104,7 @@ func (t *treeBuilder) fields(v reflect.Value) []*models.TreeNode {
 		}
 		fv := v.Field(i)
 		switch f.Name {
-		case "IEExtensions", "UnknownExtensions", "UnknownValue", "ChoiceExtensions", "AdditionalIEs":
+		case "IEExtensions", "UnknownExtensions", "UnknownValue", "ChoiceExtensions", "AdditionalIEs", "UnknownIEs":
 			if fv.IsZero() || (fv.Kind() == reflect.Slice && fv.Len() == 0) {
 				continue
 			}

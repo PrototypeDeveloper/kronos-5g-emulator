@@ -20,9 +20,12 @@ type Env interface {
 	// set(a = a + 1) from many subscribers adds every one.
 	Assign(name string, eval func() (Value, error)) error
 	Builtin(name string) (Value, error) // $imsi etc., without the "$"
-	LinkUp() error                      // set up the SCTP association (linkup)
-	LinkDown() error                    // shut the association down (linkdown)
-	Reload() error                      // read signal.txt again (reload)
+	// Field returns an IE of the message that started the handler (else the
+	// last one received): proto is nas or ngap. A missing IE is TypeNone.
+	Field(proto string, path []FieldSeg) (Value, error)
+	LinkUp() error   // set up the SCTP association (linkup)
+	LinkDown() error // shut the association down (linkdown)
+	Reload() error   // read signal.txt again (reload)
 	// SetMapping turns the mapping of items on or off: of the subscriber,
 	// of the node, or on the console of the node and every subscriber.
 	SetMapping(items models.MapOff, on bool) error
