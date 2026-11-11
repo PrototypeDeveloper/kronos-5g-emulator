@@ -1,0 +1,34 @@
+// ASN.1 structure derived from TS 38.413; codec methods are maintained in libngap.
+
+package ngapType
+
+import "libngap/ngapcodec"
+
+type AreaOfInterestItemExtIEsEntryPresent uint32
+
+const (
+	AreaOfInterestItemExtIEsEntryPresentNothing AreaOfInterestItemExtIEsEntryPresent = iota
+	AreaOfInterestItemExtIEsEntryPresentUnknown
+)
+
+type AreaOfInterestItemExtIEsEntry struct {
+	ID           ProtocolExtensionID
+	Criticality  Criticality
+	Present      AreaOfInterestItemExtIEsEntryPresent
+	UnknownValue []byte
+}
+
+// Encode encodes this parameter as a standalone APER value, without an IE header.
+func (v AreaOfInterestItemExtIEsEntry) Encode() ([]byte, error) {
+	return ngapcodec.EncodeParameter("AreaOfInterestItem-ExtIEsEntry", v)
+}
+
+// DecodeAreaOfInterestItemExtIEsEntry decodes a standalone APER value and reports the consumed octets.
+func DecodeAreaOfInterestItemExtIEsEntry(data []byte) (AreaOfInterestItemExtIEsEntry, int, error) {
+	var v AreaOfInterestItemExtIEsEntry
+	err := ngapcodec.DecodeParameter("AreaOfInterestItem-ExtIEsEntry", data, &v)
+	if ngapcodec.IsFatal(err) {
+		return AreaOfInterestItemExtIEsEntry{}, 0, err
+	}
+	return v, len(data), err
+}

@@ -1,0 +1,214 @@
+// Types of the engine.
+
+package engine
+
+import (
+	"context"
+	"net"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"kronos/command"
+	"kronos/models"
+	"kronos/scenario"
+	"kronos/simulator/role"
+	"kronos/state"
+	"kronos/traffic"
+	"kronos/transport/sctp"
+)
+
+// The engine and the state it shares between actors.
+
+// Engine runs one pseudo-call.
+type Engine struct {
+	cfg          *state.Config
+	sigs         atomic.Pointer[scenario.SignalSet] // replaced by reload
+	fileMu       sync.Mutex                         // signal.txt writes and reloads
+	scen         *scenario.File
+	role         role.Role
+	bus          *Bus
+	vars         *varStore
+	snap         bool
+	nodeHandlers map[string]*scenario.Handler // by canonical NGAP name
+	subs         []*subscriber
+	routes       *routes
+	uplane       *uplane
+	openTUN      tunOpener                       // nil without ue.tun
+	ctx          atomic.Pointer[context.Context] // set by Start (runCtx reads it); ends background work such as ping
+	started      time.Time
+
+	mu       sync.Mutex
+	running  bool
+	linkBusy bool  // a linkup is in progress
+	node     *node // the current association; nil while the link is down
+	stopped  chan struct{}
+}
+
+// consoleEnv runs the commands that act on the pseudo-call as a whole
+// (help, linkup, linkdown) and collects their output.
+type consoleEnv struct {
+	e   *Engine
+	out *strings.Builder
+}
+
+// varStore holds the public variables, shared by the whole pseudo-call. Each
+// access is atomic.
+type varStore struct {
+	mu sync.Mutex
+	m  map[string]command.Value
+}
+
+// routes maps the UE NGAP IDs of current UE associations to subscribers,
+// and the 5G-S-TMSI of registered UEs (kept in CM-IDLE) for Paging.
+type routes struct {
+	mu     sync.Mutex
+	ran    map[int64]*subscriber
+	amf    map[int64]*subscriber
+	paging map[string]*subscriber
+}
+
+// The event bus.
+
+// Bus fans events out to subscribers (CUI, trace file, web console) and keeps
+// recent history. Publishing never blocks: a subscriber that falls behind
+// loses events and the loss is counted.
+type Bus struct {
+	mu      sync.Mutex
+	seq     uint64
+	subs    map[int]chan models.Event
+	next    int
+	ring    []models.Event
+	head    int
+	full    bool
+	dropped uint64
+	count   models.Counters
+}
+
+// The node actor and the messages of the actors' inboxes.
+
+// node is the actor of one SCTP association. Received PDUs,
+// the node block of the scenario and node commands all run on its
+// goroutine. UE-associated PDUs are handed to the subscriber actors.
+type node struct {
+	e           *Engine
+	conn        *sctp.Conn
+	inbox       chan any
+	done        chan struct{}
+	lastMsg     string
+	subsStarted bool
+	outStreams  uint16 // fixed for the association; read by subscriber actors
+
+	mu     sync.Mutex // guards status for snapshots taken by other goroutines
+	status models.NodeStatus
+}
+
+// rxMsg is a PDU received on the association.
+type rxMsg struct {
+	b    []byte
+	info models.SCTPInfo
+}
+
+// lostMsg tells the actor that the association has ended.
+type lostMsg struct{ err error }
+
+// execMsg runs a command on an actor; the result goes to reply.
+type execMsg struct {
+	call  command.Call
+	reply chan<- execResult
+}
+
+// execResult is the outcome of an execMsg; imsi names the actor that ran it.
+type execResult struct {
+	imsi string
+	err  error
+}
+
+// startMsg makes the actor run the entry of its start state (NG Setup has succeeded).
+type startMsg struct{}
+
+// resetMsg makes the actor return to its initial state (the link went down).
+type resetMsg struct{}
+
+// ueRx is a UE-associated PDU routed to this subscriber, already decoded.
+type ueRx struct {
+	msg  any
+	raw  []byte
+	info models.SCTPInfo
+}
+
+// The subscriber actor, its traffic runs and its TUN device.
+
+// subscriber is the actor of one subscriber: the scenario state
+// machine, the private variables and the role's protocol context. Everything
+// runs on its goroutine, so none of it needs locking.
+type subscriber struct {
+	e     *Engine
+	index int
+	imsi  string
+	inbox chan any
+	ue    role.UE
+
+	state   string
+	vars    map[string]command.Value
+	lastMsg string
+	moved   string                  // the last move() target, whose entry runs after the handler
+	tunnels map[uint8]models.Tunnel // active PDU session tunnels by session ID
+	stack   *traffic.Stack          // the UE's IP endpoints (ping, iperf); safe for concurrent use
+	runs    trafficRuns             // the pings and iperfs running
+	tun     atomic.Pointer[ueTUN]   // the host TUN device (ue.tun); the N3 reader writes to it
+
+	// stat is the snapshot the web console reads without stopping the actor;
+	// the actor refreshes it after each message.
+	statMu sync.Mutex
+	stat   models.UEStatus
+}
+
+// trafficRun is one running ping or iperf.
+type trafficRun struct {
+	kind   string // "ping" or "iperf"
+	cancel context.CancelFunc
+}
+
+// trafficRuns holds a subscriber's runs by ID; a run removes itself from its own goroutine when it ends.
+type trafficRuns struct {
+	mu   sync.Mutex
+	next int
+	runs map[int]trafficRun
+}
+
+// ueTUN is the device of a subscriber and the PDU session it carries.
+type ueTUN struct {
+	dev     tunDevice
+	session uint8
+	ueIP    netip.Addr
+	dropped atomic.Uint64 // uplink packets with no tunnel (idle) or not from the UE
+}
+
+// The N3 user plane.
+
+// uplane is the N3 user plane: one kernel UDP socket on
+// gtpu.src. Downlink G-PDUs go by TEID to the subscriber's IP stack (ping,
+// iperf), ICMP echo requests to a UE are answered, and GTP-U Echo Requests
+// too. The socket is opened with the first tunnel.
+type uplane struct {
+	e         *Engine
+	mu        sync.Mutex
+	conn      *net.UDPConn
+	byDL      map[uint32]dlRoute
+	bySession map[sessionKey]models.Tunnel
+}
+
+// dlRoute is where a downlink TEID leads: the subscriber and its tunnel.
+type dlRoute struct {
+	s *subscriber
+	t models.Tunnel
+}
+
+// sessionKey names a PDU session of a subscriber.
+type sessionKey struct {
+	s  *subscriber
+	id uint8
+}

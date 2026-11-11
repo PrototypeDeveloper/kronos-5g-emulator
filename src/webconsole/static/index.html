@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Kronos 5G Emulator Console</title>
+    <link rel="icon" type="image/svg+xml" href="/kronos-mark.svg" />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div id="shell">
+      <aside>
+        <div class="brand brand--sidebar">
+          <img class="brand__mark" src="/kronos-mark.svg" alt="" width="44" height="44" />
+          <h2 class="brand__name"><strong>KRONOS</strong><span>5G EMULATOR</span></h2>
+        </div>
+        <small>gNodeB pseudo-call console</small>
+        <nav aria-label="Menu">
+          <button data-page="dashboard">Dashboard</button
+          ><button data-page="ues">Subscribers</button
+          ><button data-page="ops">Operations</button
+          ><button data-page="signals">Signals</button
+          ><button data-page="sequence">Sequence</button
+          ><button data-page="scenario">Scenario</button
+          ><button data-page="logs">Logs</button>
+        </nav>
+        <div class="side-block">
+          <span class="eyebrow">LINK</span>
+          <div class="side-row"><span>SCTP</span><span id="sideSctp" class="badge off">—</span></div>
+          <div class="side-row"><span>NG Setup</span><span id="sideSetup" class="badge off">—</span></div>
+          <div class="side-row"><span>Events</span><span id="sideStream" class="badge off">—</span></div>
+        </div>
+        <div class="side-block">
+          <span class="eyebrow">TARGET</span>
+          <div id="sideTarget" class="target-box"></div>
+        </div>
+        <small id="version" class="version"></small>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <span class="eyebrow">PSEUDO-CALL CONSOLE</span>
+            <h1 id="title">Dashboard</h1>
+          </div>
+          <div class="header-actions">
+            <button id="linkup" type="button" title="Connect SCTP (linkup)">linkup</button>
+            <button id="linkdown" type="button" class="secondary" title="Disconnect SCTP (linkdown)">linkdown</button>
+          </div>
+        </header>
+        <p id="notice" role="status" aria-live="polite"></p>
+        <div id="content">
+          <section id="page-dashboard" class="page"></section>
+          <section id="page-ues" class="page" hidden></section>
+          <section id="page-ops" class="page" hidden></section>
+          <section id="page-signals" class="page fill" hidden></section>
+          <section id="page-sequence" class="page fill" hidden></section>
+          <section id="page-scenario" class="page" hidden></section>
+          <section id="page-logs" class="page fill" hidden></section>
+        </div>
+        <div id="cmdbar">
+          <div id="cmdout" aria-live="polite"></div>
+          <form id="cmdform" autocomplete="off">
+            <span id="cmdTarget"></span>
+            <label class="prompt" for="cmdline">gnodeb&gt;</label>
+            <input id="cmdline" spellcheck="false" placeholder="Command (same syntax as the CUI, e.g. send(InitialUEMeesageRegistrationRequest), help, @cmds.txt)" />
+            <button type="submit">Run</button>
+            <button id="cmdToggle" type="button" class="secondary" title="Show or hide the output">Output</button>
+          </form>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

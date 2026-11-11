@@ -1,0 +1,65 @@
+var {
+	public a = 1
+	private s = "test"
+	private t = 5s
+	private d = 1.1
+}
+
+node {
+	entry {
+		send(NGSetupRequest)
+	}
+
+	receive(NGSetupResponse) {
+		snap("Receive:NGSetupResponse")
+	}
+}
+
+any {
+	receive(PDUSessionResourceReleaseCommand:PDUSessionReleaseCommand) {
+		send(UplinkNASTransportPDUSessionReleaseComplete)
+		send(PDUSessionResourceReleaseResponse)
+	}
+
+	receive(UEContextReleaseCommand) {
+		send(UEContextReleaseComplete)
+	}
+
+	receive(InitialContextSetupRequest:ServiceAccept) {
+		send(InitialContextSetupResponseSVR)
+	}
+
+	receive(Paging) {
+		send(InitialUEMeesageServiceRequest)
+	}
+}
+
+start {
+	entry {
+		send(InitialUEMeesageRegistrationRequest)
+	}
+
+	receive(DownLinkNasTransport:AuthenticationRequest) {
+		send(UpLinkNASTransportAuthenticationResponse)
+	}
+
+	receive(DownLinkNasTransport:SecurityModeCommand) {
+		send(UpLinkNASTransportSecurityModeComplete)
+	}
+
+	receive(InitialContextSetupRequest:RegistrationAccept) {
+		send(InitialContextSetupResponse)
+		send(UplinkNASTransportRegistrationComplete)
+		move(sessionestablishment)
+	}
+}
+
+sessionestablishment {
+	entry {
+		send(UplinkNASTransportPDUSessionEstablishmentRequest)
+	}
+
+	receive(PDUSessionResourceSetupRequest:PDUSessionEstablishmentAccept) {
+		send(PDUSessionResourceSetupResponse)
+	}
+}

@@ -1,0 +1,59 @@
+base:
+  snap: true
+  debug: true
+
+ue:
+  imsi: 208930000000001
+  subscription: 1
+  suci:
+    protectionscheme: 0
+    keyid: 1
+    key: 5a8d38864820197c3394b92613b20b91633cbd897119273bf8e4a6f4eec0a650
+    routingindicator: 0000
+  credential:
+    key: 8baf473f2f8fd09487cccbd7097c6862
+    op: 8e27b6af0e692e750f32667a3b14605d
+    type: OPC
+    amf: 8000
+  type: IPv4
+  apn: internet
+  integrity:
+    nia0: true
+    nia1: true
+    nia2: true
+  ciphering:
+    nea0: true
+    nea1: true
+    nea2: true
+
+gnodeb:
+  ngap:
+    src:
+      address: 10.10.30.30
+      port: 42373
+    dst:
+      address: 10.10.30.40
+      port: 38412
+  gtpu:
+    src:
+      address: 10.10.30.30
+      port: 2152
+    dst:
+      address: 10.10.30.40
+      port: 2152
+  http:
+    src:
+      address: 127.0.0.1
+      port: 12345
+  web:
+    src:
+      address: 10.10.10.30
+      port: 8080
+  plmn:
+    mcc: 208
+    mnc: 93
+  snssai:
+    - sst: 1
+      sd: 010203
+  tac: 1
+  gnodebid: 000001
